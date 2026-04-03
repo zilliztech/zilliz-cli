@@ -1,6 +1,8 @@
 # Zilliz CLI
 
-The official command-line tool for [Zilliz Cloud](https://docs.zilliz.com/reference/cli/overview) — manage clusters, collections, and vector data directly from your terminal.
+The official command-line tool for [Zilliz Cloud](https://zilliz.com) — manage clusters, collections, and vector data directly from your terminal.
+
+## Installation
 
 ### macOS / Linux
 
@@ -13,6 +15,18 @@ curl -fsSL https://raw.githubusercontent.com/zilliztech/zilliz-cli/master/instal
 ```powershell
 irm https://raw.githubusercontent.com/zilliztech/zilliz-cli/master/install.ps1 | iex
 ```
+
+## Usage
+
+To get started, run `zilliz --help` to see the available commands.
+
+For more information, see the [Zilliz CLI documentation](https://docs.zilliz.com/reference/cli/overview).
+
+## Related Tools
+
+- [Zilliz Plugin](https://github.com/zilliztech/zilliz-plugin)
+- [Zilliz Skill](https://github.com/zilliztech/zilliz-skill)
+- [Milvus Skill](https://github.com/zilliztech/milvus-skill)
 
 ## License
 
