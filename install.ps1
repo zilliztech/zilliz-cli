@@ -22,7 +22,6 @@ $Repo             = "zilliztech/zilliz-cli"
 $DefaultInstallDir = Join-Path $env:LOCALAPPDATA "zilliz-cli\bin"
 $InstallDir       = if ($env:ZILLIZ_INSTALL_DIR) { $env:ZILLIZ_INSTALL_DIR } else { $DefaultInstallDir }
 $RequestedVersion = if ($env:ZILLIZ_VERSION) { $env:ZILLIZ_VERSION } else { "latest" }
-$MinPythonVersion = [version]"3.8"
 
 # ── Logging helpers ──────────────────────────────────────────────────
 function Write-Info    { param($Msg) Write-Host "==> " -ForegroundColor Blue -NoNewline; Write-Host $Msg }
@@ -33,64 +32,44 @@ function Write-Err     { param($Msg) Write-Host "Error: " -ForegroundColor Red -
 # ── Check if a command exists ────────────────────────────────────────
 function Test-Command { param($Name) return [bool](Get-Command $Name -ErrorAction SilentlyContinue) }
 
-# ── Find a usable Python ────────────────────────────────────────────
-function Find-Python {
-    foreach ($cmd in @("python3", "python", "py")) {
-        if (Test-Command $cmd) {
+# ── Uninstall previous Python-based installation ────────────────────
+function Uninstall-PythonVersion {
+    $found = $false
+
+    if ((Test-Command "pipx") -and ((& pipx list 2>$null) -match $PackageName)) {
+        Write-Info "Found previous Python-based installation (pipx). Removing..."
+        try { & pipx uninstall $PackageName 2>$null } catch {}
+        $found = $true
+    }
+
+    if ((Test-Command "uv") -and ((& uv tool list 2>$null) -match $PackageName)) {
+        Write-Info "Found previous Python-based installation (uv). Removing..."
+        try { & uv tool uninstall $PackageName 2>$null } catch {}
+        $found = $true
+    }
+
+    foreach ($pipCmd in @("pip3", "pip")) {
+        if (Test-Command $pipCmd) {
             try {
-                $versionStr = & $cmd -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
-                if ($versionStr -and ([version]$versionStr -ge $MinPythonVersion)) {
-                    return $cmd
+                $showOutput = & $pipCmd show $PackageName 2>$null
+                if ($showOutput) {
+                    Write-Info "Found previous Python-based installation ($pipCmd). Removing..."
+                    & $pipCmd uninstall -y $PackageName 2>$null
+                    $found = $true
+                    break
                 }
-            } catch { continue }
+            } catch {}
         }
     }
-    return $null
-}
 
-# ══════════════════════════════════════════════════════════════════════
-#  Install Strategy: Python (current)
-# ══════════════════════════════════════════════════════════════════════
-function Install-ViaPython {
-    $pythonCmd = Find-Python
-    if (-not $pythonCmd) {
-        Write-Err @"
-Python $MinPythonVersion+ is required but not found.
-Please install Python first:
-  - Microsoft Store: search for 'Python 3'
-  - https://www.python.org/downloads/
-  - winget: winget install Python.Python.3.12
-"@
-    }
-
-    $pythonVersion = & $pythonCmd --version 2>&1
-    Write-Info "Found $pythonVersion"
-
-    $pkg = $PackageName
-    if ($RequestedVersion -ne "latest") {
-        $pkg = "${PackageName}==${RequestedVersion}"
-    }
-
-    # Prefer pipx > uv > pip
-    if (Test-Command "pipx") {
-        Write-Info "Installing $PackageName via pipx..."
-        & pipx install $pkg --force
-    }
-    elseif (Test-Command "uv") {
-        Write-Info "Installing $PackageName via uv..."
-        & uv tool install $pkg --force
-    }
-    else {
-        Write-Info "Installing $PackageName via pip..."
-        & $pythonCmd -m pip install --user --upgrade $pkg
+    if ($found) {
+        Write-Success "Previous Python-based installation removed."
     }
 }
 
 # ══════════════════════════════════════════════════════════════════════
-#  Install Strategy: Binary (future — uncomment when Rust builds are
-#  published to GitHub Releases)
+#  Install Strategy: Binary (download from GitHub Releases)
 # ══════════════════════════════════════════════════════════════════════
-<#
 function Install-ViaBinary {
     # Detect architecture
     $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
@@ -99,19 +78,23 @@ function Install-ViaBinary {
         default { Write-Err "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE" }
     }
 
-    # Resolve version
-    $version = $RequestedVersion
-    if ($version -eq "latest") {
+    # Resolve version tag
+    $tag = $RequestedVersion
+    if ($tag -eq "latest") {
         Write-Info "Fetching latest release..."
         $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ "User-Agent" = "zilliz-installer" }
-        $version = $release.tag_name
-        if (-not $version) { Write-Err "Failed to determine latest version" }
+        $tag = $release.tag_name
+        if (-not $tag) { Write-Err "Failed to determine latest version" }
     }
+
+    # Extract version number from tag (e.g. "zilliz-v1.0.1" -> "1.0.1")
+    $version = $tag -replace '^zilliz-v', '' -replace '^v', ''
     Write-Info "Version: $version"
 
     # Build download URL
-    $archive = "${BinName}-${version}-windows-${arch}.zip"
-    $url = "https://github.com/$Repo/releases/download/$version/$archive"
+    $target = "${arch}-pc-windows-msvc"
+    $archive = "${BinName}-${version}-${target}.zip"
+    $url = "https://github.com/$Repo/releases/download/$tag/$archive"
 
     # Download
     $tmpDir = Join-Path $env:TEMP "zilliz-install-$(Get-Random)"
@@ -122,10 +105,10 @@ function Install-ViaBinary {
         Invoke-WebRequest -Uri $url -OutFile (Join-Path $tmpDir $archive) -UseBasicParsing
 
         # Checksum verification (optional)
-        $checksumsUrl = "https://github.com/$Repo/releases/download/$version/sha256sums.txt"
+        $checksumsUrl = "https://github.com/$Repo/releases/download/$tag/sha256sums.txt"
         try {
             Invoke-WebRequest -Uri $checksumsUrl -OutFile (Join-Path $tmpDir "sha256sums.txt") -UseBasicParsing
-            $expectedHash = (Get-Content (Join-Path $tmpDir "sha256sums.txt") | Where-Object { $_ -match $archive }) -split '\s+' | Select-Object -First 1
+            $expectedHash = (Get-Content (Join-Path $tmpDir "sha256sums.txt") | Where-Object { $_ -match [regex]::Escape($archive) }) -split '\s+' | Select-Object -First 1
             $actualHash = (Get-FileHash -Path (Join-Path $tmpDir $archive) -Algorithm SHA256).Hash.ToLower()
             if ($expectedHash -and ($actualHash -ne $expectedHash)) {
                 Write-Err "Checksum verification failed!`nExpected: $expectedHash`nGot:      $actualHash"
@@ -140,9 +123,11 @@ function Install-ViaBinary {
         New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
         Expand-Archive -Path (Join-Path $tmpDir $archive) -DestinationPath $tmpDir -Force
 
-        # Install binaries
+        # Install binary
         Copy-Item -Path (Join-Path $tmpDir "${BinName}.exe") -Destination (Join-Path $InstallDir "${BinName}.exe") -Force
-        Copy-Item -Path (Join-Path $InstallDir "${BinName}.exe") -Destination (Join-Path $InstallDir "${BinAlias}.exe") -Force
+
+        # Create zz alias (short alias for zilliz)
+        Copy-Item -Path (Join-Path $InstallDir "${BinName}.exe") -Destination (Join-Path $InstallDir "zz.exe") -Force
 
         Write-Success "Installed $BinName $version to $InstallDir"
     }
@@ -150,7 +135,6 @@ function Install-ViaBinary {
         Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
-#>
 
 # ── Ensure InstallDir is on PATH ─────────────────────────────────────
 function Ensure-Path {
@@ -176,26 +160,19 @@ function Ensure-Path {
 function Invoke-Uninstall {
     Write-Info "Uninstalling $PackageName..."
 
-    if (Test-Command "pipx") {
-        try { & pipx uninstall $PackageName 2>$null } catch {}
-    }
-    elseif (Test-Command "uv") {
-        try { & uv tool uninstall $PackageName 2>$null } catch {}
-    }
-    elseif (Test-Command "pip3") {
-        try { & pip3 uninstall -y $PackageName 2>$null } catch {}
-    }
-    elseif (Test-Command "pip") {
-        try { & pip uninstall -y $PackageName 2>$null } catch {}
-    }
+    # Remove Python-based installations
+    Uninstall-PythonVersion
 
-    # Also clean up binary install (future-proof)
-    foreach ($bin in @("${BinName}.exe", "${BinAlias}.exe")) {
-        $binPath = Join-Path $InstallDir $bin
-        if (Test-Path $binPath) {
-            Remove-Item $binPath -Force
-            Write-Info "Removed $binPath"
-        }
+    # Remove binary install and zz alias
+    $binPath = Join-Path $InstallDir "${BinName}.exe"
+    if (Test-Path $binPath) {
+        Remove-Item $binPath -Force
+        Write-Info "Removed $binPath"
+    }
+    $zzPath = Join-Path $InstallDir "zz.exe"
+    if (Test-Path $zzPath) {
+        Remove-Item $zzPath -Force
+        Write-Info "Removed $zzPath"
     }
 
     # Remove from PATH if empty
@@ -227,11 +204,11 @@ function Main {
 
     Write-Info "Detected platform: windows/$($env:PROCESSOR_ARCHITECTURE.ToLower())"
 
-    # ── Current: Python install ──────────────────────────────────────
-    Install-ViaPython
+    # Remove previous Python-based installation if present
+    Uninstall-PythonVersion
 
-    # ── Future: switch to binary install ─────────────────────────────
-    # Install-ViaBinary
+    # Install binary from GitHub Releases
+    Install-ViaBinary
 
     Ensure-Path
 

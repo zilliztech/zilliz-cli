@@ -21,7 +21,6 @@ BIN_NAME="zilliz"                             # primary binary name
 REPO="zilliztech/zilliz-cli"                  # GitHub repo
 INSTALL_DIR="${ZILLIZ_INSTALL_DIR:-${HOME}/.local/bin}"
 REQUESTED_VERSION="${ZILLIZ_VERSION:-latest}"
-MIN_PYTHON_VERSION="3.8"
 
 # ── Logging helpers ──────────────────────────────────────────────────
 BOLD='\033[1m'
@@ -59,116 +58,107 @@ detect_platform() {
 # ── Check if a command exists ────────────────────────────────────────
 has() { command -v "$1" &>/dev/null; }
 
-# ── Compare Python versions ─────────────────────────────────────────
-python_version_ok() {
-    local python_cmd="$1"
-    local version
-    version=$("${python_cmd}" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null) || return 1
-    local major minor
-    major=$(echo "${version}" | cut -d. -f1)
-    minor=$(echo "${version}" | cut -d. -f2)
-    local req_major req_minor
-    req_major=$(echo "${MIN_PYTHON_VERSION}" | cut -d. -f1)
-    req_minor=$(echo "${MIN_PYTHON_VERSION}" | cut -d. -f2)
-    [ "${major}" -gt "${req_major}" ] || { [ "${major}" -eq "${req_major}" ] && [ "${minor}" -ge "${req_minor}" ]; }
-}
+# ── Uninstall previous Python-based installation ────────────────────
+uninstall_python_version() {
+    local found=0
 
-# ── Find a usable Python ────────────────────────────────────────────
-find_python() {
-    for cmd in python3 python; do
-        if has "${cmd}" && python_version_ok "${cmd}"; then
-            echo "${cmd}"
-            return 0
+    if has pipx && pipx list 2>/dev/null | grep -q "${PACKAGE_NAME}"; then
+        info "Found previous Python-based installation (pipx). Removing..."
+        pipx uninstall "${PACKAGE_NAME}" || true
+        found=1
+    fi
+
+    if has uv && uv tool list 2>/dev/null | grep -q "${PACKAGE_NAME}"; then
+        info "Found previous Python-based installation (uv). Removing..."
+        uv tool uninstall "${PACKAGE_NAME}" || true
+        found=1
+    fi
+
+    # Check pip-installed version (look for the Python package metadata)
+    for pip_cmd in pip3 pip; do
+        if has "${pip_cmd}" && "${pip_cmd}" show "${PACKAGE_NAME}" &>/dev/null; then
+            info "Found previous Python-based installation (${pip_cmd}). Removing..."
+            "${pip_cmd}" uninstall -y "${PACKAGE_NAME}" 2>/dev/null || true
+            found=1
+            break
         fi
     done
-    return 1
-}
 
-# ══════════════════════════════════════════════════════════════════════
-#  Install Strategy: Python (current)
-#
-#  In the future, this section will be replaced by a binary download
-#  from GitHub Releases. The user-facing install command stays the same.
-# ══════════════════════════════════════════════════════════════════════
-install_via_python() {
-    local python_cmd
-    python_cmd=$(find_python) || error "Python ${MIN_PYTHON_VERSION}+ is required but not found.
-Please install Python first:
-  macOS:  brew install python3
-  Ubuntu: sudo apt install python3 python3-pip
-  Fedora: sudo dnf install python3 python3-pip"
-
-    local python_version
-    python_version=$("${python_cmd}" --version 2>&1)
-    info "Found ${python_version}"
-
-    local pkg="${PACKAGE_NAME}"
-    if [ "${REQUESTED_VERSION}" != "latest" ]; then
-        pkg="${PACKAGE_NAME}==${REQUESTED_VERSION}"
-    fi
-
-    # Prefer pipx > uv > pip for isolated installs
-    if has pipx; then
-        info "Installing ${PACKAGE_NAME} via pipx..."
-        pipx install "${pkg}" --force
-    elif has uv; then
-        info "Installing ${PACKAGE_NAME} via uv..."
-        uv tool install "${pkg}" --force
-    else
-        info "Installing ${PACKAGE_NAME} via pip..."
-        "${python_cmd}" -m pip install --user --upgrade "${pkg}"
+    if [ "${found}" -eq 1 ]; then
+        success "Previous Python-based installation removed."
     fi
 }
 
+# ── Build Rust target triple from OS/ARCH ───────────────────────────
+get_target_triple() {
+    case "${OS}-${ARCH}" in
+        darwin-x86_64)   echo "x86_64-apple-darwin"         ;;
+        darwin-aarch64)  echo "aarch64-apple-darwin"        ;;
+        linux-x86_64)    echo "x86_64-unknown-linux-gnu"    ;;
+        linux-aarch64)   echo "aarch64-unknown-linux-gnu"   ;;
+        *)               error "No prebuilt binary for ${OS}/${ARCH}" ;;
+    esac
+}
+
 # ══════════════════════════════════════════════════════════════════════
-#  Install Strategy: Binary (future — uncomment when Rust builds are
-#  published to GitHub Releases)
+#  Install Strategy: Binary (download from GitHub Releases)
 # ══════════════════════════════════════════════════════════════════════
-# install_via_binary() {
-#     detect_platform
-#
-#     # Resolve version
-#     local version="${REQUESTED_VERSION}"
-#     if [ "${version}" = "latest" ]; then
-#         info "Fetching latest release..."
-#         version=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-#                   | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-#         [ -n "${version}" ] || error "Failed to determine latest version"
-#     fi
-#     info "Version: ${version}"
-#
-#     # Build download URL
-#     local archive="${BIN_NAME}-${version}-${OS}-${ARCH}.tar.gz"
-#     local url="https://github.com/${REPO}/releases/download/${version}/${archive}"
-#
-#     # Download & verify
-#     local tmpdir
-#     tmpdir=$(mktemp -d)
-#     trap 'rm -rf "${tmpdir}"' EXIT
-#
-#     info "Downloading ${url}..."
-#     curl -fsSL "${url}" -o "${tmpdir}/${archive}"
-#
-#     # Checksum (optional, if sha256sums.txt is published)
-#     local checksums_url="https://github.com/${REPO}/releases/download/${version}/sha256sums.txt"
-#     if curl -fsSL "${checksums_url}" -o "${tmpdir}/sha256sums.txt" 2>/dev/null; then
-#         info "Verifying checksum..."
-#         (cd "${tmpdir}" && sha256sum -c --ignore-missing sha256sums.txt) \
-#             || error "Checksum verification failed!"
-#     fi
-#
-#     # Extract & install
-#     info "Extracting to ${INSTALL_DIR}..."
-#     mkdir -p "${INSTALL_DIR}"
-#     tar -xzf "${tmpdir}/${archive}" -C "${tmpdir}"
-#
-#     # Install binaries
-#     install -m 755 "${tmpdir}/${BIN_NAME}" "${INSTALL_DIR}/${BIN_NAME}"
-#     # Create shorthand alias
-#     ln -sf "${INSTALL_DIR}/${BIN_NAME}" "${INSTALL_DIR}/${BIN_ALIAS}"
-#
-#     success "Installed ${BIN_NAME} ${version} to ${INSTALL_DIR}/${BIN_NAME}"
-# }
+install_via_binary() {
+    # Resolve version tag
+    local tag="${REQUESTED_VERSION}"
+    if [ "${tag}" = "latest" ]; then
+        info "Fetching latest release..."
+        tag=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+              | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+        [ -n "${tag}" ] || error "Failed to determine latest version"
+    fi
+
+    # Extract version number from tag (e.g. "zilliz-v1.0.1" -> "1.0.1")
+    local version="${tag}"
+    version="${version#zilliz-v}"
+    version="${version#v}"
+    info "Version: ${version}"
+
+    # Build download URL
+    local target
+    target=$(get_target_triple)
+    local archive="${BIN_NAME}-${version}-${target}.tar.gz"
+    local url="https://github.com/${REPO}/releases/download/${tag}/${archive}"
+
+    # Download & verify
+    TMPDIR_CLEANUP=$(mktemp -d)
+    local tmpdir="${TMPDIR_CLEANUP}"
+    trap 'rm -rf "${TMPDIR_CLEANUP}"' EXIT
+
+    info "Downloading ${url}..."
+    curl -fsSL "${url}" -o "${tmpdir}/${archive}"
+
+    # Checksum (optional, if sha256sums.txt is published)
+    local checksums_url="https://github.com/${REPO}/releases/download/${tag}/sha256sums.txt"
+    if curl -fsSL "${checksums_url}" -o "${tmpdir}/sha256sums.txt" 2>/dev/null; then
+        info "Verifying checksum..."
+        if has shasum; then
+            (cd "${tmpdir}" && shasum -a 256 -c --ignore-missing sha256sums.txt) \
+                || error "Checksum verification failed!"
+        elif has sha256sum; then
+            (cd "${tmpdir}" && sha256sum -c --ignore-missing sha256sums.txt) \
+                || error "Checksum verification failed!"
+        fi
+    fi
+
+    # Extract & install
+    info "Extracting to ${INSTALL_DIR}..."
+    mkdir -p "${INSTALL_DIR}"
+    tar -xzf "${tmpdir}/${archive}" -C "${tmpdir}"
+
+    # Install binary
+    install -m 755 "${tmpdir}/${BIN_NAME}" "${INSTALL_DIR}/${BIN_NAME}"
+
+    # Create zz symlink (short alias for zilliz)
+    ln -sf "${INSTALL_DIR}/${BIN_NAME}" "${INSTALL_DIR}/zz"
+
+    success "Installed ${BIN_NAME} ${version} to ${INSTALL_DIR}/${BIN_NAME}"
+}
 
 # ── Ensure INSTALL_DIR is on PATH ────────────────────────────────────
 ensure_path() {
@@ -222,24 +212,18 @@ ensure_path() {
 uninstall() {
     info "Uninstalling ${PACKAGE_NAME}..."
 
-    # Try pipx first, then uv, then pip
-    if has pipx && pipx list 2>/dev/null | grep -q "${PACKAGE_NAME}"; then
-        pipx uninstall "${PACKAGE_NAME}"
-    elif has uv && uv tool list 2>/dev/null | grep -q "${PACKAGE_NAME}"; then
-        uv tool uninstall "${PACKAGE_NAME}"
-    elif has pip3; then
-        pip3 uninstall -y "${PACKAGE_NAME}" 2>/dev/null || true
-    elif has pip; then
-        pip uninstall -y "${PACKAGE_NAME}" 2>/dev/null || true
-    fi
+    # Remove Python-based installations
+    uninstall_python_version
 
-    # Also remove binary install (future-proof)
-    for bin in "${BIN_NAME}" "${BIN_ALIAS}"; do
-        if [ -f "${INSTALL_DIR}/${bin}" ]; then
-            rm -f "${INSTALL_DIR}/${bin}"
-            info "Removed ${INSTALL_DIR}/${bin}"
-        fi
-    done
+    # Remove binary install and zz symlink
+    if [ -f "${INSTALL_DIR}/${BIN_NAME}" ]; then
+        rm -f "${INSTALL_DIR}/${BIN_NAME}"
+        info "Removed ${INSTALL_DIR}/${BIN_NAME}"
+    fi
+    if [ -L "${INSTALL_DIR}/zz" ]; then
+        rm -f "${INSTALL_DIR}/zz"
+        info "Removed ${INSTALL_DIR}/zz symlink"
+    fi
 
     success "Uninstalled ${PACKAGE_NAME}"
     exit 0
@@ -260,11 +244,11 @@ main() {
     detect_platform
     info "Detected platform: ${OS}/${ARCH}"
 
-    # ── Current: Python install ──────────────────────────────────────
-    install_via_python
+    # Remove previous Python-based installation if present
+    uninstall_python_version
 
-    # ── Future: switch to binary install ─────────────────────────────
-    # install_via_binary
+    # Install binary from GitHub Releases
+    install_via_binary
 
     ensure_path
 
