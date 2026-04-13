@@ -1,4 +1,4 @@
-name: SDK release Feishu notifier
+name: SDK release notifier
 
 on:
   schedule:
@@ -6,14 +6,17 @@ on:
   workflow_dispatch:
 
 jobs:
-  notify:
+  scan:
     runs-on: ubuntu-latest
+    outputs:
+      payload: ${{ steps.scan.outputs.payload }}
+      count: ${{ steps.scan.outputs.count }}
     steps:
-      - name: Scan releases and notify Feishu
-        env:
-          FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
+      - name: Scan releases
+        id: scan
         run: |
           node <<'JS'
+          const fs = require("fs");
           const REPOS = [
             ["Milvus C++ SDK",  "milvus-io/milvus-sdk-cpp"],
             ["PyMilvus",        "milvus-io/pymilvus"],
@@ -22,6 +25,65 @@ jobs:
             ["Zilliz CLI",      "zilliztech/zilliz-cli"],
           ];
           const WINDOW_HOURS = 25;
+
+          async function fetchReleases(repo) {
+            const res = await fetch(`https://api.github.com/repos/${repo}/releases?per_page=20`, {
+              headers: {
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "User-Agent": "sdk-release-notifier",
+              },
+            });
+            if (!res.ok) throw new Error(`GitHub ${res.status}: ${await res.text()}`);
+            return res.json();
+          }
+
+          const isNew = (r, since) => {
+            if (r.draft || r.prerelease) return false;
+            if (!r.published_at) return false;
+            return new Date(r.published_at).getTime() >= since;
+          };
+
+          (async () => {
+            const since = Date.now() - WINDOW_HOURS * 3600 * 1000;
+            console.log(`Scanning releases published since ${new Date(since).toISOString()}`);
+
+            const toSend = [];
+            for (const [sdkName, repo] of REPOS) {
+              try {
+                const releases = await fetchReleases(repo);
+                const hits = releases.filter(r => isNew(r, since));
+                console.log(`[${repo}] ${hits.length} new release(s)`);
+                for (const r of hits) {
+                  toSend.push({
+                    sdkName, repo,
+                    tag_name: r.tag_name || "",
+                    published_at: r.published_at,
+                    body: r.body || "",
+                    html_url: r.html_url || `https://github.com/${repo}/releases`,
+                  });
+                }
+              } catch (e) {
+                console.error(`[${repo}] fetch failed: ${e.message}`);
+              }
+            }
+
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `count=${toSend.length}\n`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `payload<<EOF\n${JSON.stringify(toSend)}\nEOF\n`);
+          })();
+          JS
+
+  notify:
+    needs: scan
+    if: needs.scan.outputs.count != '0'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Feishu notifications
+        env:
+          FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
+          PAYLOAD: ${{ needs.scan.outputs.payload }}
+        run: |
+          node <<'JS'
           const BODY_MAX = 100;
           const SEND_INTERVAL_MS = 1000;
 
@@ -42,36 +104,18 @@ jobs:
             return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute} CST`;
           };
 
-          async function fetchReleases(repo) {
-            const res = await fetch(`https://api.github.com/repos/${repo}/releases?per_page=20`, {
-              headers: {
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-                "User-Agent": "sdk-release-notifier",
-              },
-            });
-            if (!res.ok) throw new Error(`GitHub ${res.status}: ${await res.text()}`);
-            return res.json();
-          }
-
-          const isNew = (r, since) => {
-            if (r.draft || r.prerelease) return false;
-            if (!r.published_at) return false;
-            return new Date(r.published_at).getTime() >= since;
-          };
-
-          const buildCard = (sdkName, repo, r) => ({
+          const buildCard = (r) => ({
             msg_type: "interactive",
             card: {
               config: { wide_screen_mode: true },
               header: {
                 template: "blue",
-                title: { tag: "plain_text", content: `🎉 ${sdkName} ${r.tag_name || ""}` },
+                title: { tag: "plain_text", content: `🎉 ${r.sdkName} ${r.tag_name}` },
               },
               elements: [
                 { tag: "div", fields: [
-                  { is_short: true,  text: { tag: "lark_md", content: `**仓库**\n${repo}` } },
-                  { is_short: true,  text: { tag: "lark_md", content: `**版本**\n${r.tag_name || ""}` } },
+                  { is_short: true,  text: { tag: "lark_md", content: `**仓库**\n${r.repo}` } },
+                  { is_short: true,  text: { tag: "lark_md", content: `**版本**\n${r.tag_name}` } },
                   { is_short: false, text: { tag: "lark_md", content: `**发布时间**\n${formatCST(r.published_at)}` } },
                 ]},
                 { tag: "hr" },
@@ -80,7 +124,7 @@ jobs:
                   tag: "button",
                   text: { tag: "plain_text", content: "查看 Release" },
                   type: "primary",
-                  url: r.html_url || `https://github.com/${repo}/releases`,
+                  url: r.html_url,
                 }]},
               ],
             },
@@ -102,33 +146,19 @@ jobs:
             const webhook = process.env.FEISHU_BOT_WEBHOOK;
             if (!webhook) { console.error("ERROR: FEISHU_BOT_WEBHOOK not set"); process.exit(2); }
 
-            const since = Date.now() - WINDOW_HOURS * 3600 * 1000;
-            console.log(`Scanning releases published since ${new Date(since).toISOString()}`);
-
-            const toSend = [];
-            for (const [sdkName, repo] of REPOS) {
-              try {
-                const releases = await fetchReleases(repo);
-                const hits = releases.filter(r => isNew(r, since));
-                console.log(`[${repo}] ${hits.length} new release(s)`);
-                for (const r of hits) toSend.push([sdkName, repo, r]);
-              } catch (e) {
-                console.error(`[${repo}] fetch failed: ${e.message}`);
-              }
-            }
-
+            const toSend = JSON.parse(process.env.PAYLOAD || "[]");
             if (toSend.length === 0) { console.log("No new releases."); return; }
 
             let failures = 0;
             for (let i = 0; i < toSend.length; i++) {
               if (i > 0) await sleep(SEND_INTERVAL_MS);
-              const [sdkName, repo, r] = toSend[i];
+              const r = toSend[i];
               try {
-                await sendFeishu(webhook, buildCard(sdkName, repo, r));
-                console.log(`Sent: ${repo} ${r.tag_name || ""}`);
+                await sendFeishu(webhook, buildCard(r));
+                console.log(`Sent: ${r.repo} ${r.tag_name}`);
               } catch (e) {
                 failures++;
-                console.error(`FAILED: ${repo} ${r.tag_name || ""}: ${e.message}`);
+                console.error(`FAILED: ${r.repo} ${r.tag_name}: ${e.message}`);
               }
             }
             if (failures) process.exit(1);
