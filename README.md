@@ -7,12 +7,18 @@ The official command-line tool for [Zilliz Cloud](https://zilliz.com) — manage
 ### macOS / Linux
 
 ```bash
+curl -fsSL https://zilliz.com/cli/install.sh | bash
+
+# Alternate download address
 curl -fsSL https://raw.githubusercontent.com/zilliztech/zilliz-cli/master/install.sh | bash
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
+irm https://zilliz.com/cli/install.ps1 | iex
+
+# Alternate download address
 irm https://raw.githubusercontent.com/zilliztech/zilliz-cli/master/install.ps1 | iex
 ```
 
