@@ -18,8 +18,9 @@ jobs:
           node <<'JS'
           const fs = require("fs");
           const REPOS = [
-            ["Milvus C++ SDK",  "milvus-io/milvus-sdk-cpp"],
+            ["Milvus",          "milvus-io/milvus"],
             ["PyMilvus",        "milvus-io/pymilvus"],
+            ["Milvus C++ SDK",  "milvus-io/milvus-sdk-cpp"],
             ["Milvus Java SDK", "milvus-io/milvus-sdk-java"],
             ["Milvus Node SDK", "milvus-io/milvus-sdk-node"],
             ["Zilliz CLI",      "zilliztech/zilliz-cli"],
