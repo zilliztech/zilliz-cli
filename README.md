@@ -30,7 +30,8 @@ For more information, see the [Zilliz CLI documentation](https://docs.zilliz.com
 
 ## Related Tools
 
-- [Zilliz Plugin](https://github.com/zilliztech/zilliz-plugin)
+- [Zilliz Claude Plugin](https://github.com/zilliztech/zilliz-plugin)
+- [Gemini-cli Extension](https://github.com/zilliztech/gemini-cli-extension)
 - [Zilliz Skill](https://github.com/zilliztech/zilliz-skill)
 - [Milvus Skill](https://github.com/zilliztech/milvus-skill)
 
