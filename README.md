@@ -34,6 +34,7 @@ For more information, see the [Zilliz CLI documentation](https://docs.zilliz.com
 - [Gemini-cli Extension](https://github.com/zilliztech/gemini-cli-extension)
 - [Zilliz Skill](https://github.com/zilliztech/zilliz-skill)
 - [Milvus Skill](https://github.com/zilliztech/milvus-skill)
+- [Zilliz Launchpad](https://github.com/zilliztech/zilliz-launchpad)
 
 ## License
 
