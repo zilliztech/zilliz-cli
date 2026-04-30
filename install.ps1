@@ -167,14 +167,12 @@ function Write-NextSteps {
     Write-Host ("  3. {0,-30} {1}" -f "$BinName collection --help", "Manage collections")
     Write-Host ""
     Write-Host "Highlights:" -ForegroundColor White
-    Write-Host "  Cloud:"
-    Write-Host ("    * {0,-14} - ``{1} cluster create`` / ``scale`` / ``suspend``" -f "Clusters", $BinName)
-    Write-Host ("    * {0,-14} - bulk load data with ``{1} import``"               -f "Import jobs", $BinName)
-    Write-Host ("    * {0,-14} - ``{1} backup create`` / ``restore``"              -f "Backup", $BinName)
-    Write-Host "  Data:"
-    Write-Host ("    * {0,-14} - ``{1} vector search`` / ``query`` / ``insert``"   -f "Vector ops", $BinName)
-    Write-Host ("    * {0,-14} - ``{1} index create`` / ``list`` / ``describe``"   -f "Indexes", $BinName)
-    Write-Host ("    * {0,-14} - ``{1} user`` / ``{1} role`` (Dedicated only)"     -f "Access ctrl", $BinName)
+    Write-Host ("  * {0,-14} - ``{1} cluster create`` / ``scale`` / ``suspend``" -f "Clusters", $BinName)
+    Write-Host ("  * {0,-14} - bulk load data with ``{1} import``"               -f "Import jobs", $BinName)
+    Write-Host ("  * {0,-14} - ``{1} backup create`` / ``restore``"              -f "Backup", $BinName)
+    Write-Host ("  * {0,-14} - ``{1} vector search`` / ``query`` / ``insert``"   -f "Vector ops", $BinName)
+    Write-Host ("  * {0,-14} - ``{1} index create`` / ``list`` / ``describe``"   -f "Indexes", $BinName)
+    Write-Host ("  * {0,-14} - ``{1} user`` / ``{1} role`` (Dedicated only)"     -f "Access ctrl", $BinName)
     Write-Host ""
     Write-Host "Docs: https://docs.zilliz.com/reference/cli/overview"
     Write-Host ""
