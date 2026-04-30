@@ -208,6 +208,31 @@ ensure_path() {
     fi
 }
 
+# ── Post-install Next steps panel ────────────────────────────────────
+# NOTE: the Plugins list below is mirrored in install.ps1 and README.md
+# "Related Tools". When adding/removing an entry, update all three.
+print_next_steps() {
+    printf "\n"
+    printf "${BOLD}Next steps:${RESET}\n"
+    printf "  1. %-30s %s\n" "${BIN_NAME} login"             "Authenticate with Zilliz Cloud"
+    printf "  2. %-30s %s\n" "${BIN_NAME} cluster list"      "See your clusters"
+    printf "  3. %-30s %s\n" "${BIN_NAME} collection --help" "Manage collections"
+    printf "\n"
+    printf "${BOLD}Highlights:${RESET}\n"
+    printf "  • %-14s — bulk load data with \`%s import\`\n"             "Import jobs"  "${BIN_NAME}"
+    printf "  • %-14s — \`%s backup create\` / \`%s backup restore\`\n"  "Backup"       "${BIN_NAME}" "${BIN_NAME}"
+    printf "  • %-14s — \`%s vector search\` / \`query\` / \`insert\`\n" "Vector ops"   "${BIN_NAME}"
+    printf "\n"
+    printf "${BOLD}Plugins:${RESET}\n"
+    printf "  • %-22s %s\n" "Zilliz Claude Plugin"  "https://github.com/zilliztech/zilliz-plugin"
+    printf "  • %-22s %s\n" "Gemini-cli Extension"  "https://github.com/zilliztech/gemini-cli-extension"
+    printf "  • %-22s %s\n" "Zilliz Skill"          "https://github.com/zilliztech/zilliz-skill"
+    printf "  • %-22s %s\n" "Milvus Skill"          "https://github.com/zilliztech/milvus-skill"
+    printf "  • %-22s %s\n" "Zilliz Launchpad"      "https://github.com/zilliztech/zilliz-launchpad"
+    printf "\n"
+    printf "Docs: https://docs.zilliz.com/reference/cli/overview\n"
+}
+
 # ── Uninstall ────────────────────────────────────────────────────────
 uninstall() {
     info "Uninstalling ${PACKAGE_NAME}..."
@@ -256,12 +281,12 @@ main() {
     printf "\n"
     if has "${BIN_NAME}"; then
         success "Installation complete!"
-        info "Run '${BIN_NAME} --help' to get started."
-        info "Use '${BIN_NAME} login' to authenticate with Zilliz Cloud."
+        print_next_steps
     else
         success "Installation complete!"
         warn "Open a new terminal or run 'source ~/.bashrc' (or ~/.zshrc)"
         warn "Then run '${BIN_NAME} --help' to get started."
+        print_next_steps
     fi
 
     printf "\n"

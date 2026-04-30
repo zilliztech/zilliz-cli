@@ -156,6 +156,31 @@ function Ensure-Path {
     Write-Info "Restart your terminal for it to take effect."
 }
 
+# ── Post-install Next steps panel ────────────────────────────────────
+# NOTE: the Plugins list below is mirrored in install.sh and README.md
+# "Related Tools". When adding/removing an entry, update all three.
+function Write-NextSteps {
+    Write-Host ""
+    Write-Host "Next steps:" -ForegroundColor White
+    Write-Host ("  1. {0,-30} {1}" -f "$BinName login",             "Authenticate with Zilliz Cloud")
+    Write-Host ("  2. {0,-30} {1}" -f "$BinName cluster list",      "See your clusters")
+    Write-Host ("  3. {0,-30} {1}" -f "$BinName collection --help", "Manage collections")
+    Write-Host ""
+    Write-Host "Highlights:" -ForegroundColor White
+    Write-Host ("  * {0,-14} - bulk load data with ``{1} import``" -f "Import jobs", $BinName)
+    Write-Host ("  * {0,-14} - ``{1} backup create`` / ``{1} backup restore``" -f "Backup", $BinName)
+    Write-Host ("  * {0,-14} - ``{1} vector search`` / ``query`` / ``insert``" -f "Vector ops", $BinName)
+    Write-Host ""
+    Write-Host "Plugins:" -ForegroundColor White
+    Write-Host ("  * {0,-22} {1}" -f "Zilliz Claude Plugin", "https://github.com/zilliztech/zilliz-plugin")
+    Write-Host ("  * {0,-22} {1}" -f "Gemini-cli Extension", "https://github.com/zilliztech/gemini-cli-extension")
+    Write-Host ("  * {0,-22} {1}" -f "Zilliz Skill",         "https://github.com/zilliztech/zilliz-skill")
+    Write-Host ("  * {0,-22} {1}" -f "Milvus Skill",         "https://github.com/zilliztech/milvus-skill")
+    Write-Host ("  * {0,-22} {1}" -f "Zilliz Launchpad",     "https://github.com/zilliztech/zilliz-launchpad")
+    Write-Host ""
+    Write-Host "Docs: https://docs.zilliz.com/reference/cli/overview"
+}
+
 # ── Uninstall ────────────────────────────────────────────────────────
 function Invoke-Uninstall {
     Write-Info "Uninstalling $PackageName..."
@@ -216,12 +241,12 @@ function Main {
     Write-Host ""
     if (Test-Command $BinName) {
         Write-Success "Installation complete!"
-        Write-Info "Run '$BinName --help' to get started."
-        Write-Info "Use '$BinName login' to authenticate with Zilliz Cloud."
+        Write-NextSteps
     }
     else {
         Write-Success "Installation complete!"
         Write-Warn "Restart your terminal, then run '$BinName --help' to get started."
+        Write-NextSteps
     }
 
     Write-Host ""
