@@ -219,9 +219,16 @@ print_next_steps() {
     printf "  3. %-30s %s\n" "${BIN_NAME} collection --help" "Manage collections"
     printf "\n"
     printf "${BOLD}Highlights:${RESET}\n"
-    printf "  • %-14s — bulk load data with \`%s import\`\n"             "Import jobs"  "${BIN_NAME}"
-    printf "  • %-14s — \`%s backup create\` / \`%s backup restore\`\n"  "Backup"       "${BIN_NAME}" "${BIN_NAME}"
-    printf "  • %-14s — \`%s vector search\` / \`query\` / \`insert\`\n" "Vector ops"   "${BIN_NAME}"
+    printf "  Cloud:\n"
+    printf "    • %-14s — \`%s cluster create\` / \`scale\` / \`suspend\`\n"        "Clusters"     "${BIN_NAME}"
+    printf "    • %-14s — bulk load data with \`%s import\`\n"                      "Import jobs"  "${BIN_NAME}"
+    printf "    • %-14s — \`%s backup create\` / \`restore\`\n"                     "Backup"       "${BIN_NAME}"
+    printf "  Data:\n"
+    printf "    • %-14s — \`%s vector search\` / \`query\` / \`insert\`\n"          "Vector ops"   "${BIN_NAME}"
+    printf "    • %-14s — \`%s index create\` / \`list\` / \`describe\`\n"          "Indexes"      "${BIN_NAME}"
+    printf "    • %-14s — \`%s user\` / \`%s role\` (Dedicated only)\n"             "Access ctrl"  "${BIN_NAME}" "${BIN_NAME}"
+    printf "\n"
+    printf "${BOLD}Docs:${RESET} https://docs.zilliz.com/reference/cli/overview\n"
     printf "\n"
     printf "${BOLD}Plugins:${RESET}\n"
     printf "  • %-22s %s\n" "Zilliz Claude Plugin"  "https://github.com/zilliztech/zilliz-plugin"
@@ -229,8 +236,6 @@ print_next_steps() {
     printf "  • %-22s %s\n" "Zilliz Skill"          "https://github.com/zilliztech/zilliz-skill"
     printf "  • %-22s %s\n" "Milvus Skill"          "https://github.com/zilliztech/milvus-skill"
     printf "  • %-22s %s\n" "Zilliz Launchpad"      "https://github.com/zilliztech/zilliz-launchpad"
-    printf "\n"
-    printf "Docs: https://docs.zilliz.com/reference/cli/overview\n"
 }
 
 # ── Uninstall ────────────────────────────────────────────────────────
