@@ -50,7 +50,7 @@ To save discussion cycles.
 ## How to influence this list
 
 - File or upvote issues at <https://github.com/zilliztech/zilliz-cli/issues>.
-- An item moves out of this file when it ships under a tagged release in [CHANGELOG.md](../CHANGELOG.md).
+- An item moves out of this file when it ships under a tagged release.
 
 [#3]: https://github.com/zilliztech/zilliz-cli/issues/3
 [#5]: https://github.com/zilliztech/zilliz-cli/issues/5
