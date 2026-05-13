@@ -22,6 +22,20 @@ irm https://zilliz.com/cli/install.ps1 | iex
 irm https://raw.githubusercontent.com/zilliztech/zilliz-cli/master/install.ps1 | iex
 ```
 
+## Usage
+
+To get started, run `zilliz --help` to see the available commands.
+
+For more information, see the [Zilliz CLI documentation](https://docs.zilliz.com/reference/cli/overview).
+
+## Related Tools
+
+- [Zilliz Claude Plugin](https://github.com/zilliztech/zilliz-plugin)
+- [Gemini-cli Extension](https://github.com/zilliztech/gemini-cli-extension)
+- [Zilliz Skill](https://github.com/zilliztech/zilliz-skill)
+- [Milvus Skill](https://github.com/zilliztech/milvus-skill)
+- [Zilliz Launchpad](https://github.com/zilliztech/zilliz-launchpad)
+
 ## Uninstall
 
 ### macOS / Linux
@@ -56,20 +70,6 @@ $env:ZILLIZ_INSTALL_DIR = "C:\path\to\bin"
 ```
 
 The uninstall command removes the `zilliz` binary and the `zz` alias. It also attempts to remove older Python-based installations installed via `pipx`, `uv tool`, or `pip`.
-
-## Usage
-
-To get started, run `zilliz --help` to see the available commands.
-
-For more information, see the [Zilliz CLI documentation](https://docs.zilliz.com/reference/cli/overview).
-
-## Related Tools
-
-- [Zilliz Claude Plugin](https://github.com/zilliztech/zilliz-plugin)
-- [Gemini-cli Extension](https://github.com/zilliztech/gemini-cli-extension)
-- [Zilliz Skill](https://github.com/zilliztech/zilliz-skill)
-- [Milvus Skill](https://github.com/zilliztech/milvus-skill)
-- [Zilliz Launchpad](https://github.com/zilliztech/zilliz-launchpad)
 
 ## License
 
