@@ -24,12 +24,14 @@ For more information, see the [Zilliz CLI documentation](https://docs.zilliz.com
 
 ## Related Tools
 
-- [Zilliz Claude Plugin](https://github.com/zilliztech/zilliz-plugin)
-- [Gemini-cli Extension](https://github.com/zilliztech/gemini-cli-extension)
-- [Zilliz Skill](https://github.com/zilliztech/zilliz-skill)
-- [Milvus Skill](https://github.com/zilliztech/milvus-skill)
-- [Milvus CLI](https://github.com/zilliztech/milvus_cli)
-- [Zilliz Launchpad](https://github.com/zilliztech/zilliz-launchpad)
+| Tool | Description |
+| --- | --- |
+| [Zilliz Plugin](https://github.com/zilliztech/zilliz-plugin) | Zilliz Cloud plugin for Claude Code & OpenAI Codex — manage clusters, collections, vector search, backups, and more through natural language. |
+| [Gemini-cli Extension](https://github.com/zilliztech/gemini-cli-extension) | Gemini CLI extension for driving Zilliz Cloud via zilliz-cli. |
+| [Zilliz Skill](https://github.com/zilliztech/zilliz-skill) | Agent skill that teaches AI agents how to manage Zilliz Cloud vector databases through zilliz-cli. |
+| [Milvus Skill](https://github.com/zilliztech/milvus-skill) | Agent skill that teaches LLMs to operate Milvus vector database using pymilvus — connection, collections, vector CRUD, search, hybrid search, full-text search, indexing, RBAC, and common patterns like RAG. |
+| [Milvus CLI](https://github.com/zilliztech/milvus_cli) | Milvus Command Line. |
+| [Zilliz Launchpad](https://github.com/zilliztech/zilliz-launchpad) | From a sample document to a running Milvus / Zilliz Cloud search app in minutes — an AI-guided scaffold delivered as an Agent skill. |
 
 ## Uninstall
 
