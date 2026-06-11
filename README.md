@@ -34,6 +34,7 @@ For more information, see the [Zilliz CLI documentation](https://docs.zilliz.com
 - [Gemini-cli Extension](https://github.com/zilliztech/gemini-cli-extension)
 - [Zilliz Skill](https://github.com/zilliztech/zilliz-skill)
 - [Milvus Skill](https://github.com/zilliztech/milvus-skill)
+- [Milvus CLI](https://github.com/zilliztech/milvus_cli)
 - [Zilliz Launchpad](https://github.com/zilliztech/zilliz-launchpad)
 
 ## Uninstall
