@@ -8,18 +8,12 @@ The official command-line tool for [Zilliz Cloud](https://zilliz.com) — manage
 
 ```bash
 curl -fsSL https://zilliz.com/cli/install.sh | bash
-
-# Alternate download address
-curl -fsSL https://raw.githubusercontent.com/zilliztech/zilliz-cli/master/install.sh | bash
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
 irm https://zilliz.com/cli/install.ps1 | iex
-
-# Alternate download address
-irm https://raw.githubusercontent.com/zilliztech/zilliz-cli/master/install.ps1 | iex
 ```
 
 ## Usage
@@ -43,9 +37,6 @@ For more information, see the [Zilliz CLI documentation](https://docs.zilliz.com
 
 ```bash
 curl -fsSL https://zilliz.com/cli/install.sh | bash -s -- --uninstall
-
-# Alternate download address
-curl -fsSL https://raw.githubusercontent.com/zilliztech/zilliz-cli/master/install.sh | bash -s -- --uninstall
 ```
 
 If you installed to a custom directory, set the same `ZILLIZ_INSTALL_DIR` when uninstalling:
@@ -58,9 +49,6 @@ ZILLIZ_INSTALL_DIR=/path/to/bin curl -fsSL https://zilliz.com/cli/install.sh | b
 
 ```powershell
 & ([scriptblock]::Create((irm https://zilliz.com/cli/install.ps1))) --uninstall
-
-# Alternate download address
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/zilliztech/zilliz-cli/master/install.ps1))) --uninstall
 ```
 
 If you installed to a custom directory, set the same `ZILLIZ_INSTALL_DIR` when uninstalling:
@@ -71,6 +59,28 @@ $env:ZILLIZ_INSTALL_DIR = "C:\path\to\bin"
 ```
 
 The uninstall command removes the `zilliz` binary and the `zz` alias. It also attempts to remove older Python-based installations installed via `pipx`, `uv tool`, or `pip`.
+
+## Alternate commands
+
+### Install
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/zilliztech/zilliz-cli/master/install.sh | bash
+
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/zilliztech/zilliz-cli/master/install.ps1 | iex
+```
+
+### Uninstall
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/zilliztech/zilliz-cli/master/install.sh | bash -s -- --uninstall
+
+# Windows (PowerShell)
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/zilliztech/zilliz-cli/master/install.ps1))) --uninstall
+```
 
 ## License
 
