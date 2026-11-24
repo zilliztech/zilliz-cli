@@ -4,14 +4,20 @@
 #  Usage:
 #    irm https://raw.githubusercontent.com/zilliztech/zilliz-cli/master/install.ps1 | iex
 #
+#   Note: Windows ARM64 runs the x86_64 standalone build via Windows x64 emulation.
+#
 #  Options (via environment variables):
-#    $env:ZILLIZ_VERSION = "v2.0.0"          Install a specific version (default: latest)
+#    $env:ZILLIZ_VERSION = "v2.0.1"          Install a specific version (default: latest)
 #    $env:ZILLIZ_INSTALL_DIR = "C:\mypath"   Override install directory
 #    $env:ZILLIZ_NO_MODIFY_PATH = "1"        Skip user PATH modification
 #    $env:ZILLIZ_RELEASE_BASE_URL            Override release asset base URL
+#    $env:ZILLIZ_SKIP_CHECKSUM = "1"         Skip SHA-256 verification (legacy pre-2.0 releases only)
 # ----------------------------------------------------------------------
 
 $ErrorActionPreference = "Stop"
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+} catch {}
 
 $PackageName       = "zilliz-cli"
 $BinName           = "zilliz"
@@ -20,61 +26,67 @@ $DefaultInstallDir = Join-Path $env:LOCALAPPDATA "Programs\Zilliz"
 $LegacyInstallDir1 = Join-Path $env:LOCALAPPDATA "zilliz-cli\bin"
 $LegacyInstallDir2 = Join-Path $HOME ".zilliz\bin"
 
-$InstallDir = if ($env:ZILLIZ_INSTALL_DIR) {
-    $env:ZILLIZ_INSTALL_DIR
-} elseif ($env:INSTALL_DIR) {
-    $env:INSTALL_DIR
-} else {
-    $DefaultInstallDir
-}
-
-$RequestedVersion = if ($env:ZILLIZ_VERSION) {
-    $env:ZILLIZ_VERSION
-} elseif ($env:VERSION) {
-    $env:VERSION
-} else {
-    "latest"
-}
+$InstallDir        = if ($env:ZILLIZ_INSTALL_DIR) { $env:ZILLIZ_INSTALL_DIR } else { $DefaultInstallDir }
+$RequestedVersion  = if ($env:ZILLIZ_VERSION) { $env:ZILLIZ_VERSION } else { "latest" }
 
 function Write-Info    { param($Msg) Write-Host "==> " -ForegroundColor Blue -NoNewline; Write-Host $Msg }
 function Write-Success { param($Msg) Write-Host "==> " -ForegroundColor Green -NoNewline; Write-Host $Msg }
 function Write-Warn    { param($Msg) Write-Host "Warning: " -ForegroundColor Yellow -NoNewline; Write-Host $Msg }
-function Write-Err     { param($Msg) Write-Host "Error: " -ForegroundColor Red -NoNewline; Write-Host $Msg; exit 1 }
+function Stop-WithError { param($Msg) throw "Error: $Msg" }
 
 function Test-Command { param($Name) return [bool](Get-Command $Name -ErrorAction SilentlyContinue) }
 
-function Remove-ConflictingInstalls {
-    if ((Test-Command "pipx") -and ((& pipx list 2>$null) -match $PackageName)) {
-        Write-Info "Found global pipx installation of $PackageName. Removing..."
-        try { & pipx uninstall $PackageName 2>$null } catch {}
+function Get-HostArchitecture {
+    $rawArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+    switch ($rawArch) {
+        "AMD64" { return "x86_64" }
+        "ARM64" { return "x86_64" }
+        default { Stop-WithError "Unsupported architecture: $rawArch" }
     }
+}
 
-    if ((Test-Command "uv") -and ((& uv tool list 2>$null) -match $PackageName)) {
-        Write-Info "Found global uv tool installation of $PackageName. Removing..."
-        try { & uv tool uninstall $PackageName 2>$null } catch {}
-    }
-
-    if (-not $env:VIRTUAL_ENV -and -not $env:CONDA_PREFIX) {
-        foreach ($pipCmd in @("pip3", "pip")) {
-            if (Test-Command $pipCmd) {
-                try {
-                    $showOutput = & $pipCmd show $PackageName 2>$null
-                    if ($showOutput) {
-                        Write-Info "Found global $pipCmd installation of $PackageName. Removing..."
-                        & $pipCmd uninstall -y $PackageName 2>$null
-                        break
-                    }
-                } catch {}
+function Resolve-LatestTag {
+    $resolved = $null
+    try {
+        $req = [System.Net.HttpWebRequest]::Create("https://github.com/$Repo/releases/latest")
+        $req.Method = "HEAD"
+        $req.AllowAutoRedirect = $false
+        $req.UserAgent = "zilliz-installer"
+        $resp = $req.GetResponse()
+        $loc = $resp.Headers["Location"]
+        $resp.Close()
+        if ($loc -and ($loc -match '/releases/tag/([^/?#]+)')) {
+            $resolved = $Matches[1]
+        }
+    } catch {
+        if ($_.Exception.Response) {
+            $loc = $_.Exception.Response.Headers["Location"]
+            if ($loc -and ($loc -match '/releases/tag/([^/?#]+)')) {
+                $resolved = $Matches[1]
             }
         }
     }
 
+    if (-not $resolved) {
+        try {
+            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ "User-Agent" = "zilliz-installer" }
+            $resolved = $release.tag_name
+        } catch {}
+    }
+
+    if (-not $resolved) {
+        Stop-WithError "Failed to determine latest version from GitHub Releases. Set `$env:ZILLIZ_VERSION = 'v2.0.1' explicitly to bypass version lookup."
+    }
+    return $resolved
+}
+
+function Remove-LegacyZillizBins {
     foreach ($legacyDir in @($LegacyInstallDir1, $LegacyInstallDir2)) {
-        if ($legacyDir -and ($legacyDir -ne $InstallDir) -and (Test-Path $legacyDir)) {
+        if ($legacyDir -and ($legacyDir -ne $InstallDir) -and (Test-Path -LiteralPath $legacyDir)) {
             foreach ($exe in @("zilliz.exe", "zz.exe")) {
                 $p = Join-Path $legacyDir $exe
-                if (Test-Path $p) {
-                    Remove-Item $p -Force -ErrorAction SilentlyContinue
+                if (Test-Path -LiteralPath $p) {
+                    Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
                     Write-Info "Removed legacy binary at $p"
                 }
             }
@@ -82,27 +94,71 @@ function Remove-ConflictingInstalls {
     }
 }
 
-function Install-ViaArchive {
-    $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
-        "AMD64" { "x86_64" }
-        "ARM64" { "x86_64" }
-        default { Write-Err "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE" }
+function Install-StagedBundle {
+    param([string]$ExtractDir, [string]$TargetDir)
+
+    New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null
+    $suffix = "$PID-$([guid]::NewGuid().ToString('N').Substring(0, 6))"
+
+    $newInternal = Join-Path $ExtractDir "_internal"
+    $destInternal = Join-Path $TargetDir "_internal"
+    $stagingInternal = Join-Path $TargetDir "_internal.new-$suffix"
+    $oldInternalBackup = Join-Path $TargetDir "_internal.old-$suffix"
+
+    if (Test-Path -LiteralPath $newInternal) {
+        Copy-Item -LiteralPath $newInternal -Destination $stagingInternal -Recurse -Force
     }
+
+    if (Test-Path -LiteralPath $destInternal) {
+        Move-Item -LiteralPath $destInternal -Destination $oldInternalBackup -Force
+    }
+    if (Test-Path -LiteralPath $stagingInternal) {
+        Move-Item -LiteralPath $stagingInternal -Destination $destInternal -Force
+    }
+
+    foreach ($exeName in @("${BinName}.exe", "zz.exe")) {
+        $srcExe = Join-Path $ExtractDir $exeName
+        if (-not (Test-Path -LiteralPath $srcExe)) {
+            $srcExe = Join-Path $ExtractDir "${BinName}.exe"
+        }
+        $dstExe = Join-Path $TargetDir $exeName
+        $bakExe = Join-Path $TargetDir "${exeName}.old-$suffix"
+        if (Test-Path -LiteralPath $dstExe) {
+            try {
+                Remove-Item -LiteralPath $dstExe -Force -ErrorAction Stop
+            } catch {
+                Move-Item -LiteralPath $dstExe -Destination $bakExe -Force
+            }
+        }
+        Copy-Item -LiteralPath $srcExe -Destination $dstExe -Force
+        if (Test-Path -LiteralPath $bakExe) {
+            Remove-Item -LiteralPath $bakExe -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    if (Test-Path -LiteralPath $oldInternalBackup) {
+        Remove-Item -LiteralPath $oldInternalBackup -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Install-ViaArchive {
+    if (-not $InstallDir -or $InstallDir -eq "\" -or $InstallDir -eq $HOME) {
+        Stop-WithError "Unsafe ZILLIZ_INSTALL_DIR path: '$InstallDir'."
+    }
+    $arch = Get-HostArchitecture
 
     $tag = $RequestedVersion
     if ($tag -eq "latest") {
         if ($env:ZILLIZ_RELEASE_BASE_URL) {
-            Write-Err "ZILLIZ_VERSION must be set explicitly when ZILLIZ_RELEASE_BASE_URL is used."
+            Stop-WithError "ZILLIZ_VERSION must be set explicitly when ZILLIZ_RELEASE_BASE_URL is used."
         }
         Write-Info "Fetching latest release..."
-        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ "User-Agent" = "zilliz-installer" }
-        $tag = $release.tag_name
-        if (-not $tag) { Write-Err "Failed to determine latest version from GitHub Releases" }
+        $tag = Resolve-LatestTag
     }
 
     $version = $tag -replace '^zilliz-v', '' -replace '^v', ''
     if ($version -notmatch '^[0-9A-Za-z._-]+$') {
-        Write-Err "Invalid version string: '$version'"
+        Stop-WithError "Invalid version string: '$version'"
     }
     if ($tag -notmatch '^zilliz-v') {
         $tag = "zilliz-v$version"
@@ -114,7 +170,7 @@ function Install-ViaArchive {
     $baseUrl = if ($env:ZILLIZ_RELEASE_BASE_URL) {
         $u = $env:ZILLIZ_RELEASE_BASE_URL.TrimEnd("/")
         if ($u -notmatch '^(https://|file://)') {
-            Write-Err "ZILLIZ_RELEASE_BASE_URL must use https:// (or file:// for local testing)."
+            Stop-WithError "ZILLIZ_RELEASE_BASE_URL must use https:// (or file:// for local testing)."
         }
         $u
     } else {
@@ -138,7 +194,7 @@ function Install-ViaArchive {
             try {
                 Invoke-WebRequest -Uri $checksumsUrl -OutFile (Join-Path $tmpDir "sha256sums.txt") -UseBasicParsing
             } catch {
-                Write-Err "Failed to download $checksumsUrl; refusing unverified installation (set ZILLIZ_SKIP_CHECKSUM=1 only for legacy pre-2.0 releases without sha256sums.txt)."
+                Stop-WithError "Failed to download $checksumsUrl; refusing unverified installation (set ZILLIZ_SKIP_CHECKSUM=1 only for legacy pre-2.0 releases without sha256sums.txt)."
             }
 
             $expectedHash = $null
@@ -156,39 +212,23 @@ function Install-ViaArchive {
             }
 
             if (-not $expectedHash) {
-                Write-Err "Archive $archive is missing from sha256sums.txt; refusing unverified installation."
+                Stop-WithError "Archive $archive is missing from sha256sums.txt; refusing unverified installation."
             }
             if ($expectedHash -notmatch '^[0-9a-f]{64}$') {
-                Write-Err "Malformed SHA-256 entry '$expectedHash' in sha256sums.txt for $archive."
+                Stop-WithError "Malformed SHA-256 entry '$expectedHash' in sha256sums.txt for $archive."
             }
 
             $actualHash = (Get-FileHash -Path (Join-Path $tmpDir $archive) -Algorithm SHA256).Hash.ToLower()
             if ($actualHash -ne $expectedHash) {
-                Write-Err "Checksum verification failed!`nExpected: $expectedHash`nGot:      $actualHash"
+                Stop-WithError "Checksum verification failed! Expected: $expectedHash, Got: $actualHash"
             }
             Write-Info "Checksum verified ($actualHash)."
         }
 
         Write-Info "Extracting to $InstallDir..."
         Expand-Archive -Path (Join-Path $tmpDir $archive) -DestinationPath $extractDir -Force
-
-        New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-        $oldInternal = Join-Path $InstallDir "_internal"
-        if (Test-Path $oldInternal) {
-            Remove-Item -Path $oldInternal -Recurse -Force
-        }
-
-        Copy-Item -Path (Join-Path $extractDir "${BinName}.exe") -Destination (Join-Path $InstallDir "${BinName}.exe") -Force
-        if (Test-Path (Join-Path $extractDir "zz.exe")) {
-            Copy-Item -Path (Join-Path $extractDir "zz.exe") -Destination (Join-Path $InstallDir "zz.exe") -Force
-        } else {
-            Copy-Item -Path (Join-Path $InstallDir "${BinName}.exe") -Destination (Join-Path $InstallDir "zz.exe") -Force
-        }
-
-        $newInternal = Join-Path $extractDir "_internal"
-        if (Test-Path $newInternal) {
-            Copy-Item -Path $newInternal -Destination $oldInternal -Recurse -Force
-        }
+        Install-StagedBundle -ExtractDir $extractDir -TargetDir $InstallDir
+        Remove-LegacyZillizBins
 
         Write-Success "Installed $BinName $version to $InstallDir"
     }
@@ -201,7 +241,6 @@ function Ensure-Path {
     $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
     if (-not $userPath) { $userPath = "" }
 
-    # Remove stale legacy install dirs if empty
     $parts = $userPath -split ";" | Where-Object { $_ -ne "" }
     $parts = $parts | Where-Object {
         ($_ -ne $LegacyInstallDir1 -or (Test-Path (Join-Path $LegacyInstallDir1 "zilliz.exe")))
@@ -250,23 +289,24 @@ function Write-NextSteps {
 
 function Invoke-Uninstall {
     Write-Info "Uninstalling $PackageName..."
-    Remove-ConflictingInstalls
 
-    foreach ($exe in @("${BinName}.exe", "zz.exe")) {
-        $p = Join-Path $InstallDir $exe
-        if (Test-Path $p) {
-            Remove-Item $p -Force
-            Write-Info "Removed $p"
-        }
-    }
     $internalDir = Join-Path $InstallDir "_internal"
-    if (Test-Path $internalDir) {
-        Remove-Item $internalDir -Recurse -Force
+    $isOwnedBundle = Test-Path -LiteralPath $internalDir
+
+    if ($isOwnedBundle) {
+        foreach ($exe in @("${BinName}.exe", "zz.exe")) {
+            $p = Join-Path $InstallDir $exe
+            if (Test-Path -LiteralPath $p) {
+                Remove-Item -LiteralPath $p -Force
+                Write-Info "Removed $p"
+            }
+        }
+        Remove-Item -LiteralPath $internalDir -Recurse -Force
         Write-Info "Removed $internalDir"
     }
 
-    if ((Test-Path $InstallDir) -and (Get-ChildItem $InstallDir | Measure-Object).Count -eq 0) {
-        Remove-Item $InstallDir -Force -ErrorAction SilentlyContinue
+    if ((Test-Path -LiteralPath $InstallDir) -and (@(Get-ChildItem -LiteralPath $InstallDir -Force -ErrorAction SilentlyContinue).Count -eq 0)) {
+        Remove-Item -LiteralPath $InstallDir -Force -ErrorAction SilentlyContinue
         $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
         if ($userPath) {
             $newPath = ($userPath -split ";" | Where-Object { $_ -and ($_ -ne $InstallDir) }) -join ";"
@@ -276,7 +316,7 @@ function Invoke-Uninstall {
     }
 
     Write-Success "Uninstalled $PackageName"
-    exit 0
+    return
 }
 
 function Main {
@@ -284,6 +324,7 @@ function Main {
 
     if ($Arguments -contains "--uninstall" -or $Arguments -contains "uninstall") {
         Invoke-Uninstall
+        return
     }
 
     Write-Host ""
@@ -293,7 +334,6 @@ function Main {
 
     Write-Info "Detected platform: windows/$($env:PROCESSOR_ARCHITECTURE.ToLower())"
 
-    Remove-ConflictingInstalls
     Install-ViaArchive
     Ensure-Path
 
