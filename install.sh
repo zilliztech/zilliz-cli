@@ -1,28 +1,26 @@
 #!/usr/bin/env bash
-# ──────────────────────────────────────────────────────────────────────
-#  Zilliz CLI Installer
-#
-#  A unified CLI and TUI for managing Zilliz Cloud clusters
-#  vector database operations.
+# ----------------------------------------------------------------------
+#  Zilliz CLI Installer (macOS / Linux)
 #
 #  Usage:
 #    curl -fsSL https://raw.githubusercontent.com/zilliztech/zilliz-cli/master/install.sh | bash
 #
 #  Options (via environment variables):
-#    ZILLIZ_VERSION=v0.1.0  Install a specific version (default: latest)
-#    ZILLIZ_INSTALL_DIR     Override install directory (default: ~/.local/bin)
-#    ZILLIZ_NO_MODIFY_PATH  Set to 1 to skip PATH modification
-# ──────────────────────────────────────────────────────────────────────
+#    ZILLIZ_VERSION=v2.0.0       Install a specific version (default: latest)
+#    ZILLIZ_INSTALL_DIR          Directory for zilliz/zz executables (default: ~/.local/bin)
+#    ZILLIZ_HOME                 Directory for onedir runtime bundle (default: ~/.local/share/zilliz)
+#    ZILLIZ_NO_MODIFY_PATH=1     Set to 1 to skip shell profile PATH modification
+#    ZILLIZ_RELEASE_BASE_URL     Override release asset base URL (for mirrors/testing)
+# ----------------------------------------------------------------------
 set -euo pipefail
 
-# ── Configuration ────────────────────────────────────────────────────
-PACKAGE_NAME="zilliz-cli"                     # PyPI package name
-BIN_NAME="zilliz"                             # primary binary name
-REPO="zilliztech/zilliz-cli"                  # GitHub repo
-INSTALL_DIR="${ZILLIZ_INSTALL_DIR:-${HOME}/.local/bin}"
-REQUESTED_VERSION="${ZILLIZ_VERSION:-latest}"
+PACKAGE_NAME="zilliz-cli"
+BIN_NAME="zilliz"
+REPO="zilliztech/zilliz-cli"
+INSTALL_DIR="${ZILLIZ_INSTALL_DIR:-${INSTALL_DIR:-${HOME}/.local/bin}}"
+SHARE_DIR="${ZILLIZ_HOME:-${HOME}/.local/share/zilliz}"
+REQUESTED_VERSION="${ZILLIZ_VERSION:-${VERSION:-latest}}"
 
-# ── Logging helpers ──────────────────────────────────────────────────
 BOLD='\033[1m'
 GREEN='\033[1;32m'
 BLUE='\033[1;34m'
@@ -35,7 +33,8 @@ success() { printf "${GREEN}==>${RESET} ${BOLD}%s${RESET}\n" "$*"; }
 warn()    { printf "${YELLOW}Warning:${RESET} %s\n" "$*" >&2; }
 error()   { printf "${RED}Error:${RESET} %s\n" "$*" >&2; exit 1; }
 
-# ── Detect OS / Arch ─────────────────────────────────────────────────
+has() { command -v "$1" >/dev/null 2>&1; }
+
 detect_platform() {
     OS="$(uname -s)"
     ARCH="$(uname -m)"
@@ -43,89 +42,134 @@ detect_platform() {
     case "${OS}" in
         Linux*)   OS="linux"  ;;
         Darwin*)  OS="darwin" ;;
-        MINGW*|MSYS*|CYGWIN*) OS="windows" ;;
-        *)        error "Unsupported operating system: ${OS}" ;;
+        *)        error "Unsupported operating system: ${OS}. Use install.ps1 on Windows." ;;
     esac
 
     case "${ARCH}" in
-        x86_64|amd64)       ARCH="x86_64"  ;;
-        aarch64|arm64)      ARCH="aarch64" ;;
-        armv7l)             ARCH="armv7"   ;;
-        *)                  error "Unsupported architecture: ${ARCH}" ;;
+        x86_64|amd64)   ARCH="x86_64"  ;;
+        aarch64|arm64)  ARCH="aarch64" ;;
+        *)              error "Unsupported architecture: ${ARCH}" ;;
     esac
 }
 
-# ── Check if a command exists ────────────────────────────────────────
-has() { command -v "$1" &>/dev/null; }
+get_target_triple() {
+    case "${OS}-${ARCH}" in
+        darwin-x86_64)   echo "x86_64-apple-darwin"       ;;
+        darwin-aarch64)  echo "aarch64-apple-darwin"      ;;
+        linux-x86_64)    echo "x86_64-unknown-linux-gnu"  ;;
+        linux-aarch64)   echo "aarch64-unknown-linux-gnu" ;;
+        *)               error "No prebuilt archive for ${OS}/${ARCH}" ;;
+    esac
+}
 
-# ── Uninstall previous Python-based installation ────────────────────
-uninstall_python_version() {
-    local found=0
-
+cleanup_conflicting_installs() {
     if has pipx && pipx list 2>/dev/null | grep -q "${PACKAGE_NAME}"; then
-        info "Found previous Python-based installation (pipx). Removing..."
+        info "Found global pipx installation of ${PACKAGE_NAME}. Removing shim..."
         pipx uninstall "${PACKAGE_NAME}" || true
-        found=1
     fi
 
     if has uv && uv tool list 2>/dev/null | grep -q "${PACKAGE_NAME}"; then
-        info "Found previous Python-based installation (uv). Removing..."
+        info "Found global uv tool installation of ${PACKAGE_NAME}. Removing shim..."
         uv tool uninstall "${PACKAGE_NAME}" || true
-        found=1
     fi
 
-    # Check pip-installed version (look for the Python package metadata)
-    for pip_cmd in pip3 pip; do
-        if has "${pip_cmd}" && "${pip_cmd}" show "${PACKAGE_NAME}" &>/dev/null; then
-            info "Found previous Python-based installation (${pip_cmd}). Removing..."
-            "${pip_cmd}" uninstall -y "${PACKAGE_NAME}" 2>/dev/null || true
-            found=1
-            break
-        fi
-    done
+    # Never touch active virtualenvs or conda environments
+    if [ -z "${VIRTUAL_ENV:-}" ] && [ -z "${CONDA_PREFIX:-}" ]; then
+        for pip_cmd in pip3 pip; do
+            if has "${pip_cmd}" && "${pip_cmd}" show "${PACKAGE_NAME}" >/dev/null 2>&1; then
+                info "Found global ${pip_cmd} installation of ${PACKAGE_NAME}. Removing..."
+                "${pip_cmd}" uninstall -y "${PACKAGE_NAME}" 2>/dev/null || true
+                break
+            fi
+        done
+    fi
 
-    if [ "${found}" -eq 1 ]; then
-        success "Previous Python-based installation removed."
+    # Clean up legacy ~/.zilliz/bin single-file binary if installing elsewhere
+    local legacy_bin_dir="${HOME}/.zilliz/bin"
+    if [ "${INSTALL_DIR}" != "${legacy_bin_dir}" ]; then
+        for name in "${BIN_NAME}" "zz"; do
+            if [ -f "${legacy_bin_dir}/${name}" ] || [ -L "${legacy_bin_dir}/${name}" ]; then
+                rm -f "${legacy_bin_dir}/${name}"
+                info "Removed legacy binary at ${legacy_bin_dir}/${name}"
+            fi
+        done
     fi
 }
 
-# ── Build Rust target triple from OS/ARCH ───────────────────────────
-get_target_triple() {
-    case "${OS}-${ARCH}" in
-        darwin-x86_64)   echo "x86_64-apple-darwin"         ;;
-        darwin-aarch64)  echo "aarch64-apple-darwin"        ;;
-        linux-x86_64)    echo "x86_64-unknown-linux-gnu"    ;;
-        linux-aarch64)   echo "aarch64-unknown-linux-gnu"   ;;
-        *)               error "No prebuilt binary for ${OS}/${ARCH}" ;;
-    esac
+validate_share_dir() {
+    if [ -z "${SHARE_DIR}" ] || [ "${SHARE_DIR}" = "/" ] || [ "${SHARE_DIR}" = "${HOME}" ]; then
+        error "Unsafe ZILLIZ_HOME path: '${SHARE_DIR}'. Set ZILLIZ_HOME to a dedicated directory (e.g. ~/.local/share/zilliz)."
+    fi
 }
 
-# ══════════════════════════════════════════════════════════════════════
-#  Install Strategy: Binary (download from GitHub Releases)
-# ══════════════════════════════════════════════════════════════════════
-install_via_binary() {
-    # Resolve version tag
+verify_checksum() {
+    local dir="$1"
+    local archive="$2"
+    local sums_file="$3"
+
+    local expected=""
+    expected=$(awk -v f="${archive}" '$2 == f || $2 == ("*" f) { print tolower($1); exit }' "${sums_file}")
+    if [ -z "${expected}" ]; then
+        error "Archive ${archive} is missing from sha256sums.txt; refusing unverified installation."
+    fi
+    if ! printf '%s' "${expected}" | grep -Eq '^[0-9a-f]{64}$'; then
+        error "Malformed SHA-256 entry '${expected}' in sha256sums.txt for ${archive}."
+    fi
+
+    local actual=""
+    if has shasum; then
+        actual=$(shasum -a 256 "${dir}/${archive}" | awk '{print tolower($1)}')
+    elif has sha256sum; then
+        actual=$(sha256sum "${dir}/${archive}" | awk '{print tolower($1)}')
+    else
+        error "Neither 'shasum' nor 'sha256sum' is available to verify archive integrity."
+    fi
+
+    if [ "${actual}" != "${expected}" ]; then
+        error "Checksum verification failed for ${archive} (expected ${expected}, got ${actual})"
+    fi
+    info "Checksum verified (${actual})"
+}
+
+install_via_archive() {
+    validate_share_dir
     local tag="${REQUESTED_VERSION}"
     if [ "${tag}" = "latest" ]; then
+        if [ -n "${ZILLIZ_RELEASE_BASE_URL:-}" ]; then
+            error "ZILLIZ_VERSION must be set explicitly when ZILLIZ_RELEASE_BASE_URL is used."
+        fi
         info "Fetching latest release..."
         tag=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
               | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-        [ -n "${tag}" ] || error "Failed to determine latest version"
+        [ -n "${tag}" ] || error "Failed to determine latest version from GitHub Releases"
     fi
 
-    # Extract version number from tag (e.g. "zilliz-v1.0.1" -> "1.0.1")
     local version="${tag}"
     version="${version#zilliz-v}"
     version="${version#v}"
+    case "${version}" in
+        *[!0-9A-Za-z._-]*|"")
+            error "Invalid version string: '${version}'"
+            ;;
+    esac
+    case "${tag}" in
+        zilliz-v*) ;;
+        v*) tag="zilliz-${tag}" ;;
+        *)  tag="zilliz-v${version}" ;;
+    esac
     info "Version: ${version}"
 
-    # Build download URL
     local target
     target=$(get_target_triple)
     local archive="${BIN_NAME}-${version}-${target}.tar.gz"
-    local url="https://github.com/${REPO}/releases/download/${tag}/${archive}"
+    local base_url="${ZILLIZ_RELEASE_BASE_URL:-https://github.com/${REPO}/releases/download/${tag}}"
+    base_url="${base_url%/}"
+    case "${base_url}" in
+        https://*|file://*) ;;
+        *) error "ZILLIZ_RELEASE_BASE_URL must use https:// (or file:// for local testing)." ;;
+    esac
+    local url="${base_url}/${archive}"
 
-    # Download & verify
     TMPDIR_CLEANUP=$(mktemp -d)
     local tmpdir="${TMPDIR_CLEANUP}"
     trap 'rm -rf "${TMPDIR_CLEANUP}"' EXIT
@@ -133,34 +177,50 @@ install_via_binary() {
     info "Downloading ${url}..."
     curl -fsSL "${url}" -o "${tmpdir}/${archive}"
 
-    # Checksum (optional, if sha256sums.txt is published)
-    local checksums_url="https://github.com/${REPO}/releases/download/${tag}/sha256sums.txt"
-    if curl -fsSL "${checksums_url}" -o "${tmpdir}/sha256sums.txt" 2>/dev/null; then
+    if [ "${ZILLIZ_SKIP_CHECKSUM:-0}" = "1" ]; then
+        warn "Skipping checksum verification because ZILLIZ_SKIP_CHECKSUM=1."
+    else
+        local checksums_url="${base_url}/sha256sums.txt"
         info "Verifying checksum..."
-        if has shasum; then
-            (cd "${tmpdir}" && shasum -a 256 -c --ignore-missing sha256sums.txt) \
-                || error "Checksum verification failed!"
-        elif has sha256sum; then
-            (cd "${tmpdir}" && sha256sum -c --ignore-missing sha256sums.txt) \
-                || error "Checksum verification failed!"
+        if ! curl -fsSL "${checksums_url}" -o "${tmpdir}/sha256sums.txt" 2>/dev/null; then
+            error "Failed to download ${checksums_url}; refusing unverified installation (set ZILLIZ_SKIP_CHECKSUM=1 only for legacy pre-2.0 releases without sha256sums.txt)."
         fi
+        verify_checksum "${tmpdir}" "${archive}" "${tmpdir}/sha256sums.txt"
     fi
 
-    # Extract & install
-    info "Extracting to ${INSTALL_DIR}..."
+    mkdir -p "${tmpdir}/extracted"
+    tar -xzf "${tmpdir}/${archive}" -C "${tmpdir}/extracted"
     mkdir -p "${INSTALL_DIR}"
-    tar -xzf "${tmpdir}/${archive}" -C "${tmpdir}"
 
-    # Install binary
-    install -m 755 "${tmpdir}/${BIN_NAME}" "${INSTALL_DIR}/${BIN_NAME}"
+    if [ -d "${tmpdir}/extracted/_internal" ]; then
+        # v2.0.0+ PyInstaller onedir bundle: replace only owned entries inside SHARE_DIR
+        info "Installing runtime bundle to ${SHARE_DIR}..."
+        mkdir -p "${SHARE_DIR}"
+        local staging_internal="${SHARE_DIR}/.internal-staging-$$"
+        rm -rf "${staging_internal}"
+        mv "${tmpdir}/extracted/_internal" "${staging_internal}"
+        install -m 755 "${tmpdir}/extracted/${BIN_NAME}" "${SHARE_DIR}/${BIN_NAME}"
+        rm -f "${SHARE_DIR}/zz"
+        ln -s "${BIN_NAME}" "${SHARE_DIR}/zz"
+        rm -rf "${SHARE_DIR}/_internal"
+        mv "${staging_internal}" "${SHARE_DIR}/_internal"
 
-    # Create zz symlink (short alias for zilliz)
-    ln -sf "${INSTALL_DIR}/${BIN_NAME}" "${INSTALL_DIR}/zz"
+        rm -f "${INSTALL_DIR}/${BIN_NAME}" "${INSTALL_DIR}/zz"
+        ln -s "${SHARE_DIR}/${BIN_NAME}" "${INSTALL_DIR}/${BIN_NAME}"
+        ln -s "${SHARE_DIR}/${BIN_NAME}" "${INSTALL_DIR}/zz"
+    else
+        # Legacy v1.x single-file binary archive
+        info "Installing binary to ${INSTALL_DIR}..."
+        rm -rf "${SHARE_DIR}/_internal" "${SHARE_DIR}/${BIN_NAME}" "${SHARE_DIR}/zz"
+        rmdir "${SHARE_DIR}" 2>/dev/null || true
+        rm -f "${INSTALL_DIR}/${BIN_NAME}" "${INSTALL_DIR}/zz"
+        install -m 755 "${tmpdir}/extracted/${BIN_NAME}" "${INSTALL_DIR}/${BIN_NAME}"
+        ln -s "${INSTALL_DIR}/${BIN_NAME}" "${INSTALL_DIR}/zz"
+    fi
 
-    success "Installed ${BIN_NAME} ${version} to ${INSTALL_DIR}/${BIN_NAME}"
+    success "Installed ${BIN_NAME} ${version} (${INSTALL_DIR}/${BIN_NAME})"
 }
 
-# ── Ensure INSTALL_DIR is on PATH ────────────────────────────────────
 ensure_path() {
     if echo "${PATH}" | tr ':' '\n' | grep -qx "${INSTALL_DIR}"; then
         return 0
@@ -196,7 +256,7 @@ ensure_path() {
             path_line="export PATH=\"${INSTALL_DIR}:\$PATH\""
         fi
 
-        # Avoid duplicate entries
+        mkdir -p "$(dirname "${profile}")"
         if ! grep -qF "${INSTALL_DIR}" "${profile}" 2>/dev/null; then
             printf '\n# Added by Zilliz CLI installer\n%s\n' "${path_line}" >> "${profile}"
             info "Added ${INSTALL_DIR} to PATH in ${profile}"
@@ -208,9 +268,6 @@ ensure_path() {
     fi
 }
 
-# ── Post-install Next steps panel ────────────────────────────────────
-# NOTE: the Plugins list below is mirrored in install.ps1 and README.md
-# "Related Tools". When adding/removing an entry, update all three.
 print_next_steps() {
     printf "\n"
     printf "${BOLD}Next steps:${RESET}\n"
@@ -219,50 +276,52 @@ print_next_steps() {
     printf "  3. %-30s %s\n" "${BIN_NAME} collection --help" "Manage collections"
     printf "\n"
     printf "${BOLD}Highlights:${RESET}\n"
-    printf "  • %-14s — \`%s cluster create\` / \`scale\` / \`suspend\`\n"        "Clusters"     "${BIN_NAME}"
-    printf "  • %-14s — bulk load data with \`%s import\`\n"                      "Import jobs"  "${BIN_NAME}"
-    printf "  • %-14s — \`%s backup create\` / \`restore\`\n"                     "Backup"       "${BIN_NAME}"
-    printf "  • %-14s — \`%s vector search\` / \`query\` / \`insert\`\n"          "Vector ops"   "${BIN_NAME}"
-    printf "  • %-14s — \`%s index create\` / \`list\` / \`describe\`\n"          "Indexes"      "${BIN_NAME}"
-    printf "  • %-14s — \`%s user\` / \`%s role\` (Dedicated only)\n"             "Access ctrl"  "${BIN_NAME}" "${BIN_NAME}"
+    printf "  * %-14s - \`%s cluster create\` / \`modify\` / \`suspend\`\n"      "Clusters"     "${BIN_NAME}"
+    printf "  * %-14s - bulk stage & load data with \`%s volume\` / \`import\`\n" "Data ingest"  "${BIN_NAME}"
+    printf "  * %-14s - \`%s backup create\` / \`restore-cluster\`\n"            "Backup"       "${BIN_NAME}"
+    printf "  * %-14s - \`%s vector search\` / \`query\` / \`insert\`\n"         "Vector ops"   "${BIN_NAME}"
+    printf "  * %-14s - \`%s acl\` / \`%s user\` / \`%s role\`\n"                "Access ctrl"  "${BIN_NAME}" "${BIN_NAME}" "${BIN_NAME}"
     printf "\n"
     printf "${BOLD}Docs:${RESET} https://docs.zilliz.com/reference/cli/overview\n"
     printf "\n"
     printf "${BOLD}Plugins:${RESET}\n"
-    printf "  • %-22s %s\n" "Zilliz Claude Plugin"  "https://github.com/zilliztech/zilliz-plugin"
-    printf "  • %-22s %s\n" "Gemini-cli Extension"  "https://github.com/zilliztech/gemini-cli-extension"
-    printf "  • %-22s %s\n" "Zilliz Skill"          "https://github.com/zilliztech/zilliz-skill"
-    printf "  • %-22s %s\n" "Milvus Skill"          "https://github.com/zilliztech/milvus-skill"
-    printf "  • %-22s %s\n" "Zilliz Launchpad"      "https://github.com/zilliztech/zilliz-launchpad"
+    printf "  * %-22s %s\n" "Zilliz Agent Plugin"   "https://github.com/zilliztech/zilliz-plugin"
+    printf "  * %-22s %s\n" "Gemini CLI Extension"  "https://github.com/zilliztech/gemini-cli-extension"
+    printf "  * %-22s %s\n" "Zilliz Skill"          "https://github.com/zilliztech/zilliz-skill"
+    printf "  * %-22s %s\n" "Milvus Skill"          "https://github.com/zilliztech/milvus-skill"
 }
 
-# ── Uninstall ────────────────────────────────────────────────────────
 uninstall() {
+    validate_share_dir
     info "Uninstalling ${PACKAGE_NAME}..."
+    cleanup_conflicting_installs
 
-    # Remove Python-based installations
-    uninstall_python_version
+    for name in "${BIN_NAME}" "zz"; do
+        if [ -f "${INSTALL_DIR}/${name}" ] || [ -L "${INSTALL_DIR}/${name}" ]; then
+            rm -f "${INSTALL_DIR}/${name}"
+            info "Removed ${INSTALL_DIR}/${name}"
+        fi
+    done
 
-    # Remove binary install and zz symlink
-    if [ -f "${INSTALL_DIR}/${BIN_NAME}" ]; then
-        rm -f "${INSTALL_DIR}/${BIN_NAME}"
-        info "Removed ${INSTALL_DIR}/${BIN_NAME}"
-    fi
-    if [ -L "${INSTALL_DIR}/zz" ]; then
-        rm -f "${INSTALL_DIR}/zz"
-        info "Removed ${INSTALL_DIR}/zz symlink"
+    if [ -d "${SHARE_DIR}" ]; then
+        rm -rf "${SHARE_DIR}/_internal" "${SHARE_DIR}/${BIN_NAME}" "${SHARE_DIR}/zz"
+        rmdir "${SHARE_DIR}" 2>/dev/null || true
+        info "Removed runtime bundle from ${SHARE_DIR}"
     fi
 
     success "Uninstalled ${PACKAGE_NAME}"
     exit 0
 }
 
-# ── Main ─────────────────────────────────────────────────────────────
 main() {
-    # Handle --uninstall flag
     if [ "${1:-}" = "--uninstall" ] || [ "${1:-}" = "uninstall" ]; then
         uninstall
     fi
+
+    check_deps=0
+    has curl || { error "'curl' is required to install Zilliz CLI."; check_deps=1; }
+    has tar  || { error "'tar' is required to install Zilliz CLI."; check_deps=1; }
+    [ "${check_deps}" -eq 0 ]
 
     printf "\n"
     printf "${BOLD}  Zilliz CLI Installer${RESET}\n"
@@ -272,26 +331,19 @@ main() {
     detect_platform
     info "Detected platform: ${OS}/${ARCH}"
 
-    # Remove previous Python-based installation if present
-    uninstall_python_version
-
-    # Install binary from GitHub Releases
-    install_via_binary
-
+    cleanup_conflicting_installs
+    install_via_archive
     ensure_path
 
-    # Verify installation
     printf "\n"
     if has "${BIN_NAME}"; then
         success "Installation complete!"
         print_next_steps
     else
         success "Installation complete!"
-        warn "Open a new terminal or run 'source ~/.bashrc' (or ~/.zshrc)"
-        warn "Then run '${BIN_NAME} --help' to get started."
+        warn "Open a new terminal or update PATH, then run '${BIN_NAME} --help' to get started."
         print_next_steps
     fi
-
     printf "\n"
 }
 
