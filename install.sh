@@ -6,20 +6,21 @@
 #    curl -fsSL https://raw.githubusercontent.com/zilliztech/zilliz-cli/master/install.sh | bash
 #
 #  Options (via environment variables):
-#    ZILLIZ_VERSION=v2.0.0       Install a specific version (default: latest)
+#    ZILLIZ_VERSION=v2.0.1       Install a specific version (default: latest)
 #    ZILLIZ_INSTALL_DIR          Directory for zilliz/zz executables (default: ~/.local/bin)
 #    ZILLIZ_HOME                 Directory for onedir runtime bundle (default: ~/.local/share/zilliz)
 #    ZILLIZ_NO_MODIFY_PATH=1     Set to 1 to skip shell profile PATH modification
 #    ZILLIZ_RELEASE_BASE_URL     Override release asset base URL (for mirrors/testing)
+#    ZILLIZ_SKIP_CHECKSUM=1      Skip SHA-256 verification (legacy pre-2.0 releases only)
 # ----------------------------------------------------------------------
 set -euo pipefail
 
 PACKAGE_NAME="zilliz-cli"
 BIN_NAME="zilliz"
 REPO="zilliztech/zilliz-cli"
-INSTALL_DIR="${ZILLIZ_INSTALL_DIR:-${INSTALL_DIR:-${HOME}/.local/bin}}"
+INSTALL_DIR="${ZILLIZ_INSTALL_DIR:-${HOME}/.local/bin}"
 SHARE_DIR="${ZILLIZ_HOME:-${HOME}/.local/share/zilliz}"
-REQUESTED_VERSION="${ZILLIZ_VERSION:-${VERSION:-latest}}"
+REQUESTED_VERSION="${ZILLIZ_VERSION:-latest}"
 
 BOLD='\033[1m'
 GREEN='\033[1;32m'
@@ -62,29 +63,8 @@ get_target_triple() {
     esac
 }
 
-cleanup_conflicting_installs() {
-    if has pipx && pipx list 2>/dev/null | grep -q "${PACKAGE_NAME}"; then
-        info "Found global pipx installation of ${PACKAGE_NAME}. Removing shim..."
-        pipx uninstall "${PACKAGE_NAME}" || true
-    fi
-
-    if has uv && uv tool list 2>/dev/null | grep -q "${PACKAGE_NAME}"; then
-        info "Found global uv tool installation of ${PACKAGE_NAME}. Removing shim..."
-        uv tool uninstall "${PACKAGE_NAME}" || true
-    fi
-
-    # Never touch active virtualenvs or conda environments
-    if [ -z "${VIRTUAL_ENV:-}" ] && [ -z "${CONDA_PREFIX:-}" ]; then
-        for pip_cmd in pip3 pip; do
-            if has "${pip_cmd}" && "${pip_cmd}" show "${PACKAGE_NAME}" >/dev/null 2>&1; then
-                info "Found global ${pip_cmd} installation of ${PACKAGE_NAME}. Removing..."
-                "${pip_cmd}" uninstall -y "${PACKAGE_NAME}" 2>/dev/null || true
-                break
-            fi
-        done
-    fi
-
-    # Clean up legacy ~/.zilliz/bin single-file binary if installing elsewhere
+cleanup_legacy_zilliz_bin() {
+    # Clean up legacy ~/.zilliz/bin single-file binary AFTER new archive is verified and installed
     local legacy_bin_dir="${HOME}/.zilliz/bin"
     if [ "${INSTALL_DIR}" != "${legacy_bin_dir}" ]; then
         for name in "${BIN_NAME}" "zz"; do
@@ -96,9 +76,40 @@ cleanup_conflicting_installs() {
     fi
 }
 
+warn_shadowing_installs() {
+    local active_bin=""
+    active_bin=$(command -v "${BIN_NAME}" 2>/dev/null || true)
+    if [ -n "${active_bin}" ] && [ "${active_bin}" != "${INSTALL_DIR}/${BIN_NAME}" ]; then
+        warn "Another '${BIN_NAME}' executable is earlier on PATH at ${active_bin}."
+        warn "Ensure ${INSTALL_DIR} precedes it on PATH, or uninstall the other copy if no longer needed."
+    fi
+}
+
+resolve_latest_tag() {
+    local latest_url=""
+    local resolved=""
+    latest_url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest" 2>/dev/null || true)
+    case "${latest_url}" in
+        */releases/tag/*)
+            resolved="${latest_url##*/releases/tag/}"
+            resolved="${resolved%%\?*}"
+            resolved="${resolved%%#*}"
+            ;;
+    esac
+    if [ -z "${resolved}" ]; then
+        resolved=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+            | grep '"tag_name"' | head -1 | cut -d'"' -f4 || true)
+    fi
+    [ -n "${resolved}" ] || error "Failed to determine latest version from GitHub Releases. Set ZILLIZ_VERSION=v2.0.1 explicitly to bypass version lookup."
+    printf '%s' "${resolved}"
+}
+
 validate_share_dir() {
     if [ -z "${SHARE_DIR}" ] || [ "${SHARE_DIR}" = "/" ] || [ "${SHARE_DIR}" = "${HOME}" ]; then
         error "Unsafe ZILLIZ_HOME path: '${SHARE_DIR}'. Set ZILLIZ_HOME to a dedicated directory (e.g. ~/.local/share/zilliz)."
+    fi
+    if [ -z "${INSTALL_DIR}" ] || [ "${INSTALL_DIR}" = "/" ] || [ "${INSTALL_DIR}" = "${HOME}" ]; then
+        error "Unsafe ZILLIZ_INSTALL_DIR path: '${INSTALL_DIR}'."
     fi
 }
 
@@ -139,9 +150,7 @@ install_via_archive() {
             error "ZILLIZ_VERSION must be set explicitly when ZILLIZ_RELEASE_BASE_URL is used."
         fi
         info "Fetching latest release..."
-        tag=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-              | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-        [ -n "${tag}" ] || error "Failed to determine latest version from GitHub Releases"
+        tag="$(resolve_latest_tag)"
     fi
 
     local version="${tag}"
@@ -218,6 +227,7 @@ install_via_archive() {
         ln -s "${INSTALL_DIR}/${BIN_NAME}" "${INSTALL_DIR}/zz"
     fi
 
+    cleanup_legacy_zilliz_bin
     success "Installed ${BIN_NAME} ${version} (${INSTALL_DIR}/${BIN_NAME})"
 }
 
@@ -294,12 +304,21 @@ print_next_steps() {
 uninstall() {
     validate_share_dir
     info "Uninstalling ${PACKAGE_NAME}..."
-    cleanup_conflicting_installs
 
     for name in "${BIN_NAME}" "zz"; do
-        if [ -f "${INSTALL_DIR}/${name}" ] || [ -L "${INSTALL_DIR}/${name}" ]; then
-            rm -f "${INSTALL_DIR}/${name}"
-            info "Removed ${INSTALL_DIR}/${name}"
+        local candidate="${INSTALL_DIR}/${name}"
+        if [ -L "${candidate}" ]; then
+            local target=""
+            target=$(readlink "${candidate}" 2>/dev/null || true)
+            case "${target}" in
+                "${SHARE_DIR}"/*|"${BIN_NAME}"|"${INSTALL_DIR}/${BIN_NAME}")
+                    rm -f "${candidate}"
+                    info "Removed ${candidate}"
+                    ;;
+            esac
+        elif [ -f "${candidate}" ] && [ "${INSTALL_DIR}" = "${SHARE_DIR}" ]; then
+            rm -f "${candidate}"
+            info "Removed ${candidate}"
         fi
     done
 
@@ -331,9 +350,9 @@ main() {
     detect_platform
     info "Detected platform: ${OS}/${ARCH}"
 
-    cleanup_conflicting_installs
     install_via_archive
     ensure_path
+    warn_shadowing_installs
 
     printf "\n"
     if has "${BIN_NAME}"; then
