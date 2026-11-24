@@ -1,133 +1,194 @@
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 #  Zilliz CLI Installer (Windows PowerShell)
-#
-#  A unified CLI and TUI for managing Zilliz Cloud clusters
-#  vector database operations.
 #
 #  Usage:
 #    irm https://raw.githubusercontent.com/zilliztech/zilliz-cli/master/install.ps1 | iex
 #
 #  Options (via environment variables):
-#    $env:ZILLIZ_VERSION = "v0.1.0"          Install a specific version
+#    $env:ZILLIZ_VERSION = "v2.0.0"          Install a specific version (default: latest)
 #    $env:ZILLIZ_INSTALL_DIR = "C:\mypath"   Override install directory
-#    $env:ZILLIZ_NO_MODIFY_PATH = "1"        Skip PATH modification
-# ──────────────────────────────────────────────────────────────────────
+#    $env:ZILLIZ_NO_MODIFY_PATH = "1"        Skip user PATH modification
+#    $env:ZILLIZ_RELEASE_BASE_URL            Override release asset base URL
+# ----------------------------------------------------------------------
 
 $ErrorActionPreference = "Stop"
 
-# ── Configuration ────────────────────────────────────────────────────
-$PackageName      = "zilliz-cli"
-$BinName          = "zilliz"
-$Repo             = "zilliztech/zilliz-cli"
-$DefaultInstallDir = Join-Path $env:LOCALAPPDATA "zilliz-cli\bin"
-$InstallDir       = if ($env:ZILLIZ_INSTALL_DIR) { $env:ZILLIZ_INSTALL_DIR } else { $DefaultInstallDir }
-$RequestedVersion = if ($env:ZILLIZ_VERSION) { $env:ZILLIZ_VERSION } else { "latest" }
+$PackageName       = "zilliz-cli"
+$BinName           = "zilliz"
+$Repo              = "zilliztech/zilliz-cli"
+$DefaultInstallDir = Join-Path $env:LOCALAPPDATA "Programs\Zilliz"
+$LegacyInstallDir1 = Join-Path $env:LOCALAPPDATA "zilliz-cli\bin"
+$LegacyInstallDir2 = Join-Path $HOME ".zilliz\bin"
 
-# ── Logging helpers ──────────────────────────────────────────────────
+$InstallDir = if ($env:ZILLIZ_INSTALL_DIR) {
+    $env:ZILLIZ_INSTALL_DIR
+} elseif ($env:INSTALL_DIR) {
+    $env:INSTALL_DIR
+} else {
+    $DefaultInstallDir
+}
+
+$RequestedVersion = if ($env:ZILLIZ_VERSION) {
+    $env:ZILLIZ_VERSION
+} elseif ($env:VERSION) {
+    $env:VERSION
+} else {
+    "latest"
+}
+
 function Write-Info    { param($Msg) Write-Host "==> " -ForegroundColor Blue -NoNewline; Write-Host $Msg }
 function Write-Success { param($Msg) Write-Host "==> " -ForegroundColor Green -NoNewline; Write-Host $Msg }
 function Write-Warn    { param($Msg) Write-Host "Warning: " -ForegroundColor Yellow -NoNewline; Write-Host $Msg }
 function Write-Err     { param($Msg) Write-Host "Error: " -ForegroundColor Red -NoNewline; Write-Host $Msg; exit 1 }
 
-# ── Check if a command exists ────────────────────────────────────────
 function Test-Command { param($Name) return [bool](Get-Command $Name -ErrorAction SilentlyContinue) }
 
-# ── Uninstall previous Python-based installation ────────────────────
-function Uninstall-PythonVersion {
-    $found = $false
-
+function Remove-ConflictingInstalls {
     if ((Test-Command "pipx") -and ((& pipx list 2>$null) -match $PackageName)) {
-        Write-Info "Found previous Python-based installation (pipx). Removing..."
+        Write-Info "Found global pipx installation of $PackageName. Removing..."
         try { & pipx uninstall $PackageName 2>$null } catch {}
-        $found = $true
     }
 
     if ((Test-Command "uv") -and ((& uv tool list 2>$null) -match $PackageName)) {
-        Write-Info "Found previous Python-based installation (uv). Removing..."
+        Write-Info "Found global uv tool installation of $PackageName. Removing..."
         try { & uv tool uninstall $PackageName 2>$null } catch {}
-        $found = $true
     }
 
-    foreach ($pipCmd in @("pip3", "pip")) {
-        if (Test-Command $pipCmd) {
-            try {
-                $showOutput = & $pipCmd show $PackageName 2>$null
-                if ($showOutput) {
-                    Write-Info "Found previous Python-based installation ($pipCmd). Removing..."
-                    & $pipCmd uninstall -y $PackageName 2>$null
-                    $found = $true
-                    break
-                }
-            } catch {}
+    if (-not $env:VIRTUAL_ENV -and -not $env:CONDA_PREFIX) {
+        foreach ($pipCmd in @("pip3", "pip")) {
+            if (Test-Command $pipCmd) {
+                try {
+                    $showOutput = & $pipCmd show $PackageName 2>$null
+                    if ($showOutput) {
+                        Write-Info "Found global $pipCmd installation of $PackageName. Removing..."
+                        & $pipCmd uninstall -y $PackageName 2>$null
+                        break
+                    }
+                } catch {}
+            }
         }
     }
 
-    if ($found) {
-        Write-Success "Previous Python-based installation removed."
+    foreach ($legacyDir in @($LegacyInstallDir1, $LegacyInstallDir2)) {
+        if ($legacyDir -and ($legacyDir -ne $InstallDir) -and (Test-Path $legacyDir)) {
+            foreach ($exe in @("zilliz.exe", "zz.exe")) {
+                $p = Join-Path $legacyDir $exe
+                if (Test-Path $p) {
+                    Remove-Item $p -Force -ErrorAction SilentlyContinue
+                    Write-Info "Removed legacy binary at $p"
+                }
+            }
+        }
     }
 }
 
-# ══════════════════════════════════════════════════════════════════════
-#  Install Strategy: Binary (download from GitHub Releases)
-# ══════════════════════════════════════════════════════════════════════
-function Install-ViaBinary {
-    # Detect architecture
+function Install-ViaArchive {
     $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
         "AMD64" { "x86_64" }
-        "ARM64" { "aarch64" }
+        "ARM64" { "x86_64" }
         default { Write-Err "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE" }
     }
 
-    # Resolve version tag
     $tag = $RequestedVersion
     if ($tag -eq "latest") {
+        if ($env:ZILLIZ_RELEASE_BASE_URL) {
+            Write-Err "ZILLIZ_VERSION must be set explicitly when ZILLIZ_RELEASE_BASE_URL is used."
+        }
         Write-Info "Fetching latest release..."
         $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ "User-Agent" = "zilliz-installer" }
         $tag = $release.tag_name
-        if (-not $tag) { Write-Err "Failed to determine latest version" }
+        if (-not $tag) { Write-Err "Failed to determine latest version from GitHub Releases" }
     }
 
-    # Extract version number from tag (e.g. "zilliz-v1.0.1" -> "1.0.1")
     $version = $tag -replace '^zilliz-v', '' -replace '^v', ''
+    if ($version -notmatch '^[0-9A-Za-z._-]+$') {
+        Write-Err "Invalid version string: '$version'"
+    }
+    if ($tag -notmatch '^zilliz-v') {
+        $tag = "zilliz-v$version"
+    }
     Write-Info "Version: $version"
 
-    # Build download URL
     $target = "${arch}-pc-windows-msvc"
     $archive = "${BinName}-${version}-${target}.zip"
-    $url = "https://github.com/$Repo/releases/download/$tag/$archive"
+    $baseUrl = if ($env:ZILLIZ_RELEASE_BASE_URL) {
+        $u = $env:ZILLIZ_RELEASE_BASE_URL.TrimEnd("/")
+        if ($u -notmatch '^(https://|file://)') {
+            Write-Err "ZILLIZ_RELEASE_BASE_URL must use https:// (or file:// for local testing)."
+        }
+        $u
+    } else {
+        "https://github.com/$Repo/releases/download/$tag"
+    }
+    $url = "$baseUrl/$archive"
 
-    # Download
-    $tmpDir = Join-Path $env:TEMP "zilliz-install-$(Get-Random)"
-    New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
+    $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "zilliz-install-$([guid]::NewGuid())"
+    $extractDir = Join-Path $tmpDir "extracted"
+    New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
 
     try {
         Write-Info "Downloading $url..."
         Invoke-WebRequest -Uri $url -OutFile (Join-Path $tmpDir $archive) -UseBasicParsing
 
-        # Checksum verification (optional)
-        $checksumsUrl = "https://github.com/$Repo/releases/download/$tag/sha256sums.txt"
-        try {
-            Invoke-WebRequest -Uri $checksumsUrl -OutFile (Join-Path $tmpDir "sha256sums.txt") -UseBasicParsing
-            $expectedHash = (Get-Content (Join-Path $tmpDir "sha256sums.txt") | Where-Object { $_ -match [regex]::Escape($archive) }) -split '\s+' | Select-Object -First 1
+        if ($env:ZILLIZ_SKIP_CHECKSUM -eq "1") {
+            Write-Warn "Skipping checksum verification because ZILLIZ_SKIP_CHECKSUM=1."
+        } else {
+            $checksumsUrl = "$baseUrl/sha256sums.txt"
+            Write-Info "Verifying checksum..."
+            try {
+                Invoke-WebRequest -Uri $checksumsUrl -OutFile (Join-Path $tmpDir "sha256sums.txt") -UseBasicParsing
+            } catch {
+                Write-Err "Failed to download $checksumsUrl; refusing unverified installation (set ZILLIZ_SKIP_CHECKSUM=1 only for legacy pre-2.0 releases without sha256sums.txt)."
+            }
+
+            $expectedHash = $null
+            foreach ($line in (Get-Content (Join-Path $tmpDir "sha256sums.txt"))) {
+                $trimmed = $line.Trim()
+                if (-not $trimmed) { continue }
+                $parts = $trimmed -split '\s+', 2
+                if ($parts.Length -ge 2) {
+                    $fname = $parts[1].Trim() -replace '^\*', ''
+                    if ($fname -eq $archive) {
+                        $expectedHash = $parts[0].ToLower()
+                        break
+                    }
+                }
+            }
+
+            if (-not $expectedHash) {
+                Write-Err "Archive $archive is missing from sha256sums.txt; refusing unverified installation."
+            }
+            if ($expectedHash -notmatch '^[0-9a-f]{64}$') {
+                Write-Err "Malformed SHA-256 entry '$expectedHash' in sha256sums.txt for $archive."
+            }
+
             $actualHash = (Get-FileHash -Path (Join-Path $tmpDir $archive) -Algorithm SHA256).Hash.ToLower()
-            if ($expectedHash -and ($actualHash -ne $expectedHash)) {
+            if ($actualHash -ne $expectedHash) {
                 Write-Err "Checksum verification failed!`nExpected: $expectedHash`nGot:      $actualHash"
             }
-            Write-Info "Checksum verified."
-        } catch {
-            Write-Warn "Checksum file not available, skipping verification."
+            Write-Info "Checksum verified ($actualHash)."
         }
 
-        # Extract
         Write-Info "Extracting to $InstallDir..."
+        Expand-Archive -Path (Join-Path $tmpDir $archive) -DestinationPath $extractDir -Force
+
         New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-        Expand-Archive -Path (Join-Path $tmpDir $archive) -DestinationPath $tmpDir -Force
+        $oldInternal = Join-Path $InstallDir "_internal"
+        if (Test-Path $oldInternal) {
+            Remove-Item -Path $oldInternal -Recurse -Force
+        }
 
-        # Install binary
-        Copy-Item -Path (Join-Path $tmpDir "${BinName}.exe") -Destination (Join-Path $InstallDir "${BinName}.exe") -Force
+        Copy-Item -Path (Join-Path $extractDir "${BinName}.exe") -Destination (Join-Path $InstallDir "${BinName}.exe") -Force
+        if (Test-Path (Join-Path $extractDir "zz.exe")) {
+            Copy-Item -Path (Join-Path $extractDir "zz.exe") -Destination (Join-Path $InstallDir "zz.exe") -Force
+        } else {
+            Copy-Item -Path (Join-Path $InstallDir "${BinName}.exe") -Destination (Join-Path $InstallDir "zz.exe") -Force
+        }
 
-        # Create zz alias (short alias for zilliz)
-        Copy-Item -Path (Join-Path $InstallDir "${BinName}.exe") -Destination (Join-Path $InstallDir "zz.exe") -Force
+        $newInternal = Join-Path $extractDir "_internal"
+        if (Test-Path $newInternal) {
+            Copy-Item -Path $newInternal -Destination $oldInternal -Recurse -Force
+        }
 
         Write-Success "Installed $BinName $version to $InstallDir"
     }
@@ -136,10 +197,18 @@ function Install-ViaBinary {
     }
 }
 
-# ── Ensure InstallDir is on PATH ─────────────────────────────────────
 function Ensure-Path {
     $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-    if ($userPath -split ";" | Where-Object { $_ -eq $InstallDir }) {
+    if (-not $userPath) { $userPath = "" }
+
+    # Remove stale legacy install dirs if empty
+    $parts = $userPath -split ";" | Where-Object { $_ -ne "" }
+    $parts = $parts | Where-Object {
+        ($_ -ne $LegacyInstallDir1 -or (Test-Path (Join-Path $LegacyInstallDir1 "zilliz.exe")))
+    }
+
+    if ($parts -contains $InstallDir) {
+        $env:PATH = "$InstallDir;$env:PATH"
         return
     }
 
@@ -149,16 +218,13 @@ function Ensure-Path {
         return
     }
 
-    $newPath = $InstallDir + ";" + $userPath
+    $newPath = (@($InstallDir) + $parts) -join ";"
     [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
-    $env:PATH = $InstallDir + ";" + $env:PATH
+    $env:PATH = "$InstallDir;$env:PATH"
     Write-Info "Added $InstallDir to your user PATH."
     Write-Info "Restart your terminal for it to take effect."
 }
 
-# ── Post-install Next steps panel ────────────────────────────────────
-# NOTE: the Plugins list below is mirrored in install.sh and README.md
-# "Related Tools". When adding/removing an entry, update all three.
 function Write-NextSteps {
     Write-Host ""
     Write-Host "Next steps:" -ForegroundColor White
@@ -167,60 +233,55 @@ function Write-NextSteps {
     Write-Host ("  3. {0,-30} {1}" -f "$BinName collection --help", "Manage collections")
     Write-Host ""
     Write-Host "Highlights:" -ForegroundColor White
-    Write-Host ("  * {0,-14} - ``{1} cluster create`` / ``scale`` / ``suspend``" -f "Clusters", $BinName)
-    Write-Host ("  * {0,-14} - bulk load data with ``{1} import``"               -f "Import jobs", $BinName)
-    Write-Host ("  * {0,-14} - ``{1} backup create`` / ``restore``"              -f "Backup", $BinName)
-    Write-Host ("  * {0,-14} - ``{1} vector search`` / ``query`` / ``insert``"   -f "Vector ops", $BinName)
-    Write-Host ("  * {0,-14} - ``{1} index create`` / ``list`` / ``describe``"   -f "Indexes", $BinName)
-    Write-Host ("  * {0,-14} - ``{1} user`` / ``{1} role`` (Dedicated only)"     -f "Access ctrl", $BinName)
+    Write-Host ("  * {0,-14} - ``{1} cluster create`` / ``modify`` / ``suspend``" -f "Clusters", $BinName)
+    Write-Host ("  * {0,-14} - bulk stage & load data with ``{1} volume`` / ``import``" -f "Data ingest", $BinName)
+    Write-Host ("  * {0,-14} - ``{1} backup create`` / ``restore-cluster``"       -f "Backup", $BinName)
+    Write-Host ("  * {0,-14} - ``{1} vector search`` / ``query`` / ``insert``"    -f "Vector ops", $BinName)
+    Write-Host ("  * {0,-14} - ``{1} acl`` / ``{1} user`` / ``{1} role``"         -f "Access ctrl", $BinName)
     Write-Host ""
     Write-Host "Docs: https://docs.zilliz.com/reference/cli/overview"
     Write-Host ""
     Write-Host "Plugins:" -ForegroundColor White
-    Write-Host ("  * {0,-22} {1}" -f "Zilliz Claude Plugin", "https://github.com/zilliztech/zilliz-plugin")
-    Write-Host ("  * {0,-22} {1}" -f "Gemini-cli Extension", "https://github.com/zilliztech/gemini-cli-extension")
+    Write-Host ("  * {0,-22} {1}" -f "Zilliz Agent Plugin",  "https://github.com/zilliztech/zilliz-plugin")
+    Write-Host ("  * {0,-22} {1}" -f "Gemini CLI Extension", "https://github.com/zilliztech/gemini-cli-extension")
     Write-Host ("  * {0,-22} {1}" -f "Zilliz Skill",         "https://github.com/zilliztech/zilliz-skill")
     Write-Host ("  * {0,-22} {1}" -f "Milvus Skill",         "https://github.com/zilliztech/milvus-skill")
-    Write-Host ("  * {0,-22} {1}" -f "Zilliz Launchpad",     "https://github.com/zilliztech/zilliz-launchpad")
 }
 
-# ── Uninstall ────────────────────────────────────────────────────────
 function Invoke-Uninstall {
     Write-Info "Uninstalling $PackageName..."
+    Remove-ConflictingInstalls
 
-    # Remove Python-based installations
-    Uninstall-PythonVersion
-
-    # Remove binary install and zz alias
-    $binPath = Join-Path $InstallDir "${BinName}.exe"
-    if (Test-Path $binPath) {
-        Remove-Item $binPath -Force
-        Write-Info "Removed $binPath"
+    foreach ($exe in @("${BinName}.exe", "zz.exe")) {
+        $p = Join-Path $InstallDir $exe
+        if (Test-Path $p) {
+            Remove-Item $p -Force
+            Write-Info "Removed $p"
+        }
     }
-    $zzPath = Join-Path $InstallDir "zz.exe"
-    if (Test-Path $zzPath) {
-        Remove-Item $zzPath -Force
-        Write-Info "Removed $zzPath"
+    $internalDir = Join-Path $InstallDir "_internal"
+    if (Test-Path $internalDir) {
+        Remove-Item $internalDir -Recurse -Force
+        Write-Info "Removed $internalDir"
     }
 
-    # Remove from PATH if empty
     if ((Test-Path $InstallDir) -and (Get-ChildItem $InstallDir | Measure-Object).Count -eq 0) {
         Remove-Item $InstallDir -Force -ErrorAction SilentlyContinue
         $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-        $newPath = ($userPath -split ";" | Where-Object { $_ -ne $InstallDir }) -join ";"
-        [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
-        Write-Info "Cleaned up PATH."
+        if ($userPath) {
+            $newPath = ($userPath -split ";" | Where-Object { $_ -and ($_ -ne $InstallDir) }) -join ";"
+            [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
+            Write-Info "Cleaned up PATH."
+        }
     }
 
     Write-Success "Uninstalled $PackageName"
     exit 0
 }
 
-# ── Main ─────────────────────────────────────────────────────────────
 function Main {
     param([string[]]$Arguments)
 
-    # Handle --uninstall flag
     if ($Arguments -contains "--uninstall" -or $Arguments -contains "uninstall") {
         Invoke-Uninstall
     }
@@ -232,26 +293,19 @@ function Main {
 
     Write-Info "Detected platform: windows/$($env:PROCESSOR_ARCHITECTURE.ToLower())"
 
-    # Remove previous Python-based installation if present
-    Uninstall-PythonVersion
-
-    # Install binary from GitHub Releases
-    Install-ViaBinary
-
+    Remove-ConflictingInstalls
+    Install-ViaArchive
     Ensure-Path
 
-    # Verify installation
     Write-Host ""
     if (Test-Command $BinName) {
         Write-Success "Installation complete!"
         Write-NextSteps
-    }
-    else {
+    } else {
         Write-Success "Installation complete!"
         Write-Warn "Restart your terminal, then run '$BinName --help' to get started."
         Write-NextSteps
     }
-
     Write-Host ""
 }
 
